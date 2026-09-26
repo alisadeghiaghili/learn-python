@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LearnPyState — Python memory visualizer & challenges</title>
+  <meta name="description" content="Interactive Python memory model visualizer, sandbox, and challenge levels." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/app.css?v=0.1.1" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Learn<span>Py</span>State</div>
+    <div class="topbar-actions">
+      <button type="button" class="btn" id="btn-sandbox">Sandbox</button>
+      <button type="button" class="btn" id="btn-levels">Levels</button>
+      <button type="button" class="btn" id="btn-undo">Undo</button>
+      <button type="button" class="btn" id="btn-reset">Reset</button>
+      <div class="golf" id="golf" title="statements / par">—</div>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="canvas-wrap" aria-label="Memory canvas">
+      <svg id="canvas" role="img" aria-label="Stack and heap visualization"></svg>
+    </section>
+
+    <aside class="side">
+      <div class="brief" id="brief"></div>
+      <div class="level-pack" id="level-list" aria-label="Level list"></div>
+    </aside>
+
+    <section class="terminal-panel">
+      <div class="terminal" id="terminal" aria-live="polite"></div>
+      <div class="status" id="status"></div>
+      <form class="repl" id="repl" autocomplete="off">
+        <div class="repl-prompt">&gt;&gt;&gt;</div>
+        <textarea id="input" rows="2" spellcheck="false" placeholder="a = [1]   ·   help   ·   level intro-1" aria-label="Python input"></textarea>
+        <button type="submit" class="btn">Run</button>
+      </form>
+    </section>
+  </main>
+
+  <script type="module" src="js/main.js?v=0.1.1"></script>
+</body>
+</html>

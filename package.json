@@ -1,0 +1,11 @@
+{
+  "name": "learnpystate",
+  "version": "0.1.0",
+  "description": "Interactive Python memory visualizer, sandbox, and challenge levels",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/engine.test.js tests/levels.test.js tests/smoke.test.js",
+    "start": "node ./scripts/serve.js"
+  }
+}
