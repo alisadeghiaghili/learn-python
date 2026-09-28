@@ -1,14 +1,14 @@
-# LearnPyState
+# learn-python
 
 Interactive Python **memory model** visualizer, sandbox, and challenge levels.
 
-**Live:** https://alisadeghiaghili.github.io/learnpystate/
+**Live:** https://alisadeghiaghili.github.io/learn-python/
 
-Architectural sibling of [learnGitBranching](https://github.com/pcottle/learnGitBranching): a fully client-side simulator with a live canvas, command shell, goal-checked levels, and statement golf. Where LGB makes git's commit DAG visible, LearnPyState makes Python's stack/heap object graph visible.
+Architectural sibling of [learnGitBranching](https://github.com/pcottle/learnGitBranching): a fully client-side simulator with a live canvas, command shell, goal-checked levels, and statement golf. Where LGB makes git's commit DAG visible, learn-python makes Python's stack/heap object graph visible.
 
 ## Run
 
-Open https://alisadeghiaghili.github.io/learnpystate/ in a browser.
+Open https://alisadeghiaghili.github.io/learn-python/ in a browser.
 
 Locally, open `index.html` via a static server (ES modules need HTTP):
 

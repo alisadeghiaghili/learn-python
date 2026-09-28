@@ -51,13 +51,32 @@ body {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-family: var(--font-display);
   font-weight: 600;
   font-size: 18px;
   letter-spacing: 0.01em;
+  color: var(--ink);
+  text-decoration: none;
 }
 
-.brand span {
+.brand:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.brand-logo {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  flex: 0 0 auto;
+}
+
+.brand-accent {
   color: var(--amber);
 }
 

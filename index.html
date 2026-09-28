@@ -3,16 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LearnPyState — Python memory visualizer & challenges</title>
+  <title>learn-python — Python memory visualizer & challenges</title>
   <meta name="description" content="Interactive Python memory model visualizer, sandbox, and challenge levels." />
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/app.css?v=0.1.1" />
+  <link rel="stylesheet" href="css/app.css?v=0.2.0" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Learn<span>Py</span>State</div>
+    <a class="brand" href="./" aria-label="learn-python home">
+      <img class="brand-logo" src="assets/python.svg" width="28" height="28" alt="" />
+      <span class="brand-text">learn<span class="brand-accent">-</span>python</span>
+    </a>
     <div class="topbar-actions">
       <button type="button" class="btn" id="btn-sandbox">Sandbox</button>
       <button type="button" class="btn" id="btn-levels">Levels</button>
@@ -43,6 +47,6 @@
     </section>
   </main>
 
-  <script type="module" src="js/main.js?v=0.1.1"></script>
+  <script type="module" src="js/main.js?v=0.2.0"></script>
 </body>
 </html>
