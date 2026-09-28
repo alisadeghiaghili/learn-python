@@ -1,4 +1,4 @@
-# LearnPyState — Design Spec
+# learn-python — Design Spec
 
 Interactive Python memory visualizer, sandbox, and challenge levels.
 Architectural analogue of [learnGitBranching](https://github.com/pcottle/learnGitBranching): a client-side simulator with a live canvas, command shell, and goal-checked levels.
@@ -8,7 +8,7 @@ Architectural analogue of [learnGitBranching](https://github.com/pcottle/learnGi
 LGB works because it makes git's *invisible* state (the commit DAG) visible and gameable.
 Python's invisible state is the **object memory model**: names in stack frames, objects on the heap, and reference edges between them.
 
-LearnPyState teaches that model with the same loop:
+learn-python teaches that model with the same loop:
 
 1. Type a Python statement (or meta-command).
 2. Watch stack / heap / edges update.
@@ -91,7 +91,7 @@ Scale: 11 / 12 / 14 / 16 / 20 / 28 / 40. Line length in the brief ≤ 62ch.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ LEARNPYSTATE   sandbox · levels · undo · reset    golf 3 │
+│ learn-python   sandbox · levels · undo · reset    golf 3 │
 ├───────────────────────────────┬──────────────────────────┤
 │                               │  LEVEL BRIEF (paper)     │
 │   MEMORY CANVAS               │  title · goal · hint     │
@@ -118,7 +118,7 @@ Scale: 11 / 12 / 14 / 16 / 20 / 28 / 40. Line length in the brief ≤ 62ch.
 
 ### Interaction model (LGB parity)
 
-| LGB                         | LearnPyState                      |
+| LGB                         | learn-python                      |
 |-----------------------------|-----------------------------------|
 | git commands in sandbox     | Python statements in sandbox      |
 | commit tree updates         | memory graph updates              |
