@@ -52,7 +52,7 @@ export class App {
     this.undoStack = [];
     this.els.input.value = '';
     this.els.terminal.innerHTML = '';
-    this.println('LearnPyState sandbox. Type Python statements, or `help`.', 'muted');
+    this.println('learn-python sandbox. Type Python statements, or `help`.', 'muted');
     this.println('Meta: help · levels · level <id> · goal · hint · undo · reset · golf', 'muted');
     this.render();
   }
