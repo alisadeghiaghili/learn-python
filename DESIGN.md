@@ -25,23 +25,24 @@ Supported subset (deliberately small, pedagogically sharp):
 - `list`, `dict`, `tuple`, `set`, indexing, slicing, `.append` / `.pop` / `.update`
 - Function `def` / call / `return`, local frames, nested calls
 - `print`, `type`, `id`, `len`, `is`, `==`, arithmetic, comparisons
-- Meta: `help`, `levels`, `level`, `goal`, `hint`, `undo`, `reset`, `hint`, `golf`
+- Plotting: `scatter(xs, ys, "title")` / `line(xs, ys, "title")` → SVG board
+- Meta: `help`, `levels`, `level`, `goal`, `hint`, `solution`, `undo`, `reset`, `golf`, `script`
 
-Out of scope v0: classes/OOP, imports, exceptions (except parse/runtime errors shown cleanly), comprehensions beyond simple cases, I/O, async.
+Out of scope v0: classes/OOP, imports, exceptions (except parse/runtime errors shown cleanly), comprehensions beyond simple cases, I/O, async, `range`/`sorted`/`min`/`max`/`abs`.
 
 ## Architecture
 
 ```
-js/engine/     simulated Python runtime (heap, frames, parser, evaluator)
-js/viz/        SVG canvas: stack frames → heap objects → reference edges
-js/levels/     level pack + memoryCompare (goal checker) + golf
-js/shell/      command line, history, undo stack, dialogs
-index.html     app shell
-css/app.css    design tokens + layout
-tests/         engine + compare unit tests (node --test)
+src/engine/    simulated Python runtime (tokenizer, parser, evaluator, memory,
+               session) + goal checks (checks.ts) — the TreeCompare analogue
+src/levels/    6-series / 24-level catalog + per-level goals, par, solutions
+src/ui/        app shell, memory canvas, plot board, REPL, dialog, script editor
+src/style.css  design tokens + layout
+index.html     app shell entry
+tests/         engine + compare + level-solution unit tests (vitest)
 ```
 
-Mirrors LGB's separation: `git engine` / `visuals` / `levels` / `command line`.
+Mirrors LGB's separation: `engine` / `visuals` / `levels` / `command line`.
 
 ### Memory snapshot (the "tree" of this game)
 
@@ -91,12 +92,12 @@ Scale: 11 / 12 / 14 / 16 / 20 / 28 / 40. Line length in the brief ≤ 62ch.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ learn-python   sandbox · levels · undo · reset    golf 3 │
+│ learn-python   levels · lesson · hint · solution · undo  │
 ├───────────────────────────────┬──────────────────────────┤
-│                               │  LEVEL BRIEF (paper)     │
-│   MEMORY CANVAS               │  title · goal · hint     │
-│   [stack frames] → [heap]     │  target mini-canvas      │
-│                               │  par / your score        │
+│  [Memory] [Plot]              │  LEARNING GUIDE (paper)  │
+│   CANVAS                       │  title · brief · hint   │
+│   [stack frames] → [heap]      │  par / your score        │
+│   (or SVG scatter / line)      │  next-step hint          │
 ├───────────────────────────────┴──────────────────────────┤
 │ >>> statement | meta | multi-line …                      │
 └──────────────────────────────────────────────────────────┘
@@ -110,6 +111,7 @@ Scale: 11 / 12 / 14 / 16 / 20 / 28 / 40. Line length in the brief ≤ 62ch.
 
 1. **Reference draw** — assignment draws an amber edge from name → object with stroke-dash animation.
 2. **Alias pulse** — when a shared mutable object changes, every inbound edge pulses once together.
+3. **Data-to-chart** — `scatter`/`line` reads the same heap lists the Memory canvas shows and draws them as SVG on the Plot tab, so the object graph and the chart agree.
 
 ### Motion
 
@@ -126,12 +128,13 @@ Scale: 11 / 12 / 14 / 16 / 20 / 28 / 40. Line length in the brief ≤ 62ch.
 | goal tree compare           | goal snapshot / predicate compare |
 | command golf                | statement golf                    |
 | `undo` / `reset`            | `undo` / `reset`                  |
-| goal dialog                 | paper brief + target mini-canvas  |
-| import / build level (later)| level JSON (v0: static pack)      |
+| goal dialog                 | paper brief + learning guide panel|
+| (no analogue)               | Plot tab: data → SVG chart        |
+| import / build level (later)| level TS catalog (v0: static)     |
 
 ## Engineering standards
 
 - Files, code, comments, Markdown: English.
-- Python-sim engine in TypeScript-free ES modules with full JSDoc (`Args`, `Returns`, `Throws`).
-- Unit tests for parser, evaluator, memory compare — `node --test`.
+- Engine and UI in **TypeScript** (strict), bundled by **Vite**.
+- Unit tests for parser, evaluator, memory compare, and level solutions — **vitest** (`npm test`).
 - No AI footprint in repo content.

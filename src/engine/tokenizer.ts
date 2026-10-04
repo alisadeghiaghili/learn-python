@@ -1,11 +1,8 @@
 /**
- * Tokenizer for the LearnPyState Python subset.
+ * Tokenizer for learn-python's Python subset.
  */
 
-/**
- * @typedef {'NUMBER'|'STRING'|'NAME'|'OP'|'NEWLINE'|'INDENT'|'DEDENT'|'END'|'KEYWORD'} TokenType
- * @typedef {{type: TokenType, value: string, line: number, col: number}} Token
- */
+import type { Token } from './types';
 
 const KEYWORDS = new Set([
   'def', 'return', 'if', 'elif', 'else', 'for', 'in', 'while',
@@ -19,12 +16,10 @@ const TWO_CHAR_OPS = ['==', '!=', '<=', '>=', '//', '**', '+=', '-=', '*=', '/='
 /**
  * Tokenize Python-subset source.
  *
- * @param {string} source
- * @returns {Token[]}
  * @throws {Error} on unterminated string
  */
-export function tokenize(source) {
-  const tokens = [];
+export function tokenize(source: string): Token[] {
+  const tokens: Token[] = [];
   const lines = source.split(/\r?\n/);
   let atLineStart = true;
   let parenDepth = 0;

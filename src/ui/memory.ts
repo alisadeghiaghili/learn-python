@@ -2,6 +2,9 @@
  * SVG memory visualizer: stack frames (left) and heap objects (right).
  */
 
+import type { GoalPreview, MemoryState, RtValue } from '../engine/types';
+import type { RefEdge } from '../engine/memory';
+
 const COLORS = {
   bg: 'transparent',
   panel: '#141A1E',
@@ -20,14 +23,19 @@ const OBJ_MIN_W = 120;
 const OBJ_ROW_H = 26;
 const GAP = 48;
 
+interface Pos {
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+}
+
 /**
- * @param {SVGElement} svg
- * @param {Object} state - live runtime state (frames + heap)
- * @param {Array} edges - from referenceEdges()
- * @param {string[]} liveIds
- * @returns {void}
+ * @param state - live runtime state (frames + heap)
+ * @param edges - from referenceEdges()
+ * @param liveIds - live object ids in allocation order
  */
-export function renderMemory(svg, state, edges, liveIds) {
+export function renderMemory(svg: SVGSVGElement, state: MemoryState, edges: RefEdge[], liveIds: string[]): void {
   while (svg.firstChild) svg.removeChild(svg.firstChild);
 
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
@@ -47,8 +55,8 @@ export function renderMemory(svg, state, edges, liveIds) {
   addText(svg, 12, 18, 'STACK', COLORS.muted, 11, 'start', 'middle');
   addText(svg, layout.heapX, 18, 'HEAP', COLORS.muted, 11, 'start', 'middle');
 
-  const namePositions = new Map();
-  const objectPositions = new Map();
+  const namePositions = new Map<string, Pos & { name: string; targetId: RtValue; frame: string }>();
+  const objectPositions = new Map<string, Pos>();
 
   // Stack frames (drawn bottom-up as call stack: module at bottom)
   let y = 40;
@@ -101,60 +109,49 @@ export function renderMemory(svg, state, edges, liveIds) {
     refs.forEach((refId, i) => {
       const to = objectPositions.get(refId);
       if (!to) return;
-      drawEdge(svg, { x: from.x + from.w / 2, y: from.y + (i - refs.length / 2) * 8 }, to, 0.35);
+      drawEdge(svg, { x: from.x + (from.w ?? 0) / 2, y: from.y + (i - refs.length / 2) * 8 }, to, 0.35);
     });
   }
 }
 
-/**
- * @param {*} targetId
- * @param {Object} state
- * @returns {string}
- */
-function valueKind(targetId, state) {
-  if (state.heap[targetId]) return state.heap[targetId].type;
+function valueKind(targetId: RtValue, state: MemoryState): string {
+  if (typeof targetId === 'string' && state.heap[targetId]) return state.heap[targetId].type;
   if (targetId === null) return 'None';
   if (typeof targetId === 'boolean') return 'bool';
   if (typeof targetId === 'number') return Number.isInteger(targetId) ? 'int' : 'float';
   return 'value';
 }
 
-/**
- * @param {{type: string, value: *}} obj
- * @returns {string[]}
- */
-function containerRefs(obj) {
+function containerRefs(obj: { type: string; value: unknown }): string[] {
   const { type, value } = obj;
   if (type === 'list' || type === 'tuple' || type === 'set') {
-    return value.filter((v) => typeof v === 'string' && v.startsWith('obj_'));
+    return (value as RtValue[]).filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
   if (type === 'dict') {
-    return value.flatMap(([, v]) => (typeof v === 'string' && v.startsWith('obj_') ? [v] : []));
+    return (value as Array<[string, RtValue]>).flatMap(([, v]) => (typeof v === 'string' && v.startsWith('obj_') ? [v] : []));
   }
   return [];
 }
 
-/**
- * @param {{type: string, value: *}} obj
- * @returns {number}
- */
-function objectHeight(obj) {
+function objectHeight(obj: { type: string; value: unknown }): number {
   const { type, value } = obj;
   if (type === 'list' || type === 'tuple' || type === 'set') {
-    return 36 + Math.max(value.length, 1) * OBJ_ROW_H;
+    return 36 + Math.max((value as unknown[]).length, 1) * OBJ_ROW_H;
   }
   if (type === 'dict') {
-    return 36 + Math.max(value.length, 1) * OBJ_ROW_H;
+    return 36 + Math.max((value as unknown[]).length, 1) * OBJ_ROW_H;
   }
   return 44;
 }
 
-/**
- * @param {Object} state
- * @param {string[]} liveIds
- * @returns {{width: number, height: number, heapX: number, objW: number}}
- */
-function computeLayout(state, liveIds) {
+interface Layout {
+  width: number;
+  height: number;
+  heapX: number;
+  objW: number;
+}
+
+function computeLayout(state: MemoryState, liveIds: string[]): Layout {
   const stackH = state.frames.reduce((acc, f) => acc + 36 + Math.max(1, Object.keys(f.locals).length) * NAME_H + 12, 40);
   const heapH = liveIds.reduce((acc, id) => {
     const obj = state.heap[id];
@@ -169,17 +166,7 @@ function computeLayout(state, liveIds) {
   };
 }
 
-/**
- * @param {SVGElement} svg
- * @param {number} x
- * @param {number} y
- * @param {number} w
- * @param {number} h
- * @param {Object} frame
- * @param {boolean} active
- * @returns {void}
- */
-function drawFrame(svg, x, y, w, h, frame, active) {
+function drawFrame(svg: SVGSVGElement, x: number, y: number, w: number, h: number, frame: { name: string; locals: Record<string, RtValue> }, active: boolean): void {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   rect.setAttribute('x', String(x));
@@ -195,17 +182,7 @@ function drawFrame(svg, x, y, w, h, frame, active) {
   svg.appendChild(g);
 }
 
-/**
- * @param {SVGElement} svg
- * @param {number} x
- * @param {number} y
- * @param {number} w
- * @param {number} h
- * @param {{id: string, type: string, repr: string, value: *}} obj
- * @param {string[]} liveIds
- * @returns {void}
- */
-function drawObject(svg, x, y, w, h, obj, liveIds) {
+function drawObject(svg: SVGSVGElement, x: number, y: number, w: number, h: number, obj: { id: string; type: string; repr: string; value: unknown }, _liveIds: string[]): void {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
   rect.setAttribute('x', String(x));
@@ -222,12 +199,12 @@ function drawObject(svg, x, y, w, h, obj, liveIds) {
   addText(g, x + w - 10, y + 18, obj.id, COLORS.muted, 10, 'end', 'middle', 'IBM Plex Mono, monospace');
 
   if (obj.type === 'list' || obj.type === 'tuple' || obj.type === 'set') {
-    obj.value.forEach((v, i) => {
+    (obj.value as RtValue[]).forEach((v, i) => {
       const label = cellLabel(v, obj, i);
       addText(g, x + 14, y + 42 + i * OBJ_ROW_H, label, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
     });
   } else if (obj.type === 'dict') {
-    obj.value.forEach(([k, v], i) => {
+    (obj.value as Array<[string, RtValue]>).forEach(([k, v], i) => {
       const label = `${k}: ${cellLabel(v, obj, i)}`;
       addText(g, x + 14, y + 42 + i * OBJ_ROW_H, label, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
     });
@@ -240,13 +217,7 @@ function drawObject(svg, x, y, w, h, obj, liveIds) {
   svg.appendChild(g);
 }
 
-/**
- * @param {*} v
- * @param {{value: *}} container
- * @param {number} i
- * @returns {string}
- */
-function cellLabel(v, container, i) {
+function cellLabel(v: RtValue, container: { type: string; value: unknown }, _i: number): string {
   if (typeof v === 'string' && v.startsWith('obj_')) return `→ ${v}`;
   if (Array.isArray(container.value) && container.type !== 'dict') {
     // show primitive via stored repr slice when available
@@ -255,11 +226,7 @@ function cellLabel(v, container, i) {
   return formatPrimitive(v);
 }
 
-/**
- * @param {*} v
- * @returns {string}
- */
-function formatPrimitive(v) {
+function formatPrimitive(v: RtValue): string {
   if (v === null) return 'None';
   if (typeof v === 'boolean') return v ? 'True' : 'False';
   if (typeof v === 'string' && v.startsWith('obj_')) return `→ ${v}`;
@@ -267,15 +234,7 @@ function formatPrimitive(v) {
   return String(v);
 }
 
-/**
- * @param {SVGElement} parent
- * @param {number} x1
- * @param {number} y1
- * @param {{x: number, y: number}} to
- * @param {number} [opacity]
- * @returns {void}
- */
-function drawEdge(parent, from, to, opacity = 1) {
+function drawEdge(parent: SVGElement, from: Pos, to: Pos, opacity = 1): void {
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   const x1 = from.x;
   const y1 = from.y;
@@ -306,19 +265,7 @@ function drawEdge(parent, from, to, opacity = 1) {
   }
 }
 
-/**
- * @param {SVGElement} parent
- * @param {number} x
- * @param {number} y
- * @param {string} text
- * @param {string} fill
- * @param {number} size
- * @param {string} anchor
- * @param {string} baseline
- * @param {string} [family]
- * @returns {void}
- */
-function addText(parent, x, y, text, fill, size, anchor, baseline, family = 'IBM Plex Sans, sans-serif') {
+function addText(parent: SVGElement, x: number, y: number, text: string, fill: string, size: number, anchor: string, baseline: string, family = 'IBM Plex Sans, sans-serif'): void {
   const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
   t.setAttribute('x', String(x));
   t.setAttribute('y', String(y));
@@ -333,21 +280,18 @@ function addText(parent, x, y, text, fill, size, anchor, baseline, family = 'IBM
 
 /**
  * HTML target preview for the level brief (paper card).
- *
- * @param {Object} goalPreview - {vars: {name: {type, repr}}, aliased?: [[a,b]]}
- * @returns {string} HTML fragment
  */
-export function renderGoalHtml(goalPreview) {
+export function renderGoalHtml(goalPreview: GoalPreview | null): string {
   if (!goalPreview) return '';
   const entries = Object.entries(goalPreview.vars || {});
-  const aliasMap = new Map();
+  const aliasMap = new Map<string, string>();
   for (const [a, b] of goalPreview.aliased || []) {
     if (!aliasMap.has(a)) aliasMap.set(a, b);
   }
   const rows = entries
     .map(([name, spec]) => {
       const alias = aliasMap.has(name)
-        ? `<span class="tg-alias">≡ ${escapeHtml(aliasMap.get(name))}</span>`
+        ? `<span class="tg-alias">≡ ${escapeHtml(aliasMap.get(name)!)}</span>`
         : '';
       return (
         `<div class="tg-row">` +
@@ -361,11 +305,7 @@ export function renderGoalHtml(goalPreview) {
   return rows || '<div class="tg-row"><span class="tg-type">match goal</span></div>';
 }
 
-/**
- * @param {string} s
- * @returns {string}
- */
-function escapeHtml(s) {
+function escapeHtml(s: string): string {
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
