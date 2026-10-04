@@ -203,14 +203,6 @@ body {
   background: var(--panel-2);
 }
 
-.golf {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--muted);
-  min-width: 3.5ch;
-  text-align: center;
-}
-
 .tb-link {
   display: inline-flex;
   align-items: center;
