@@ -5,37 +5,44 @@
  * visualizer and goal checker both read.
  */
 
+import type {
+  Frame,
+  HeapObject,
+  MemoryState,
+  RtValue,
+  Snapshot,
+  SnapshotFrame,
+  SnapshotHeapObject,
+} from './types';
+
 let nextObjectId = 1;
 
 /**
  * Reset object id counter (used by tests and full resets).
- * @returns {void}
  */
-export function resetObjectIds() {
+export function resetObjectIds(): void {
   nextObjectId = 1;
 }
 
 /**
  * Allocate a heap object and return its handle.
- *
- * @param {string} type - Python type name (`list`, `dict`, `int`, ...)
- * @param {*} value - Internally structured value (refs as object ids for mutables)
- * @param {string} repr - Display representation
- * @returns {{id: string, type: string, value: *, repr: string}}
  */
-export function allocObject(type, value, repr) {
+export function allocObject(type: string, value: unknown, repr: string): HeapObject {
   const id = `obj_${nextObjectId++}`;
   return { id, type, value, repr };
 }
 
+export interface RefEdge {
+  fromFrame: string;
+  name: string;
+  toId: string;
+}
+
 /**
  * Compute inbound reference edges from frames to heap objects.
- *
- * @param {{frames: Array, heap: Object}} state
- * @returns {Array<{fromFrame: string, name: string, toId: string}>}
  */
-export function referenceEdges(state) {
-  const edges = [];
+export function referenceEdges(state: MemoryState): RefEdge[] {
+  const edges: RefEdge[] = [];
   for (const frame of state.frames) {
     for (const [name, targetId] of Object.entries(frame.locals)) {
       if (typeof targetId === 'string' && state.heap[targetId]) {
@@ -48,13 +55,10 @@ export function referenceEdges(state) {
 
 /**
  * Collect object ids reachable from frame roots (for display order).
- *
- * @param {{frames: Array, heap: Object}} state
- * @returns {string[]} object ids in stable allocation order that are live
  */
-export function liveObjectIds(state) {
-  const seen = new Set();
-  const queue = [];
+export function liveObjectIds(state: MemoryState): string[] {
+  const seen = new Set<string>();
+  const queue: string[] = [];
   for (const frame of state.frames) {
     for (const targetId of Object.values(frame.locals)) {
       if (typeof targetId === 'string' && state.heap[targetId] && !seen.has(targetId)) {
@@ -64,7 +68,7 @@ export function liveObjectIds(state) {
     }
   }
   while (queue.length) {
-    const id = queue.shift();
+    const id = queue.shift()!;
     const obj = state.heap[id];
     for (const ref of nestedRefs(obj)) {
       if (state.heap[ref] && !seen.has(ref)) {
@@ -78,41 +82,34 @@ export function liveObjectIds(state) {
 
 /**
  * Nested object ids stored inside a container value.
- *
- * @param {{type: string, value: *}} obj
- * @returns {string[]}
  */
-function nestedRefs(obj) {
+function nestedRefs(obj: HeapObject | undefined): string[] {
   if (!obj) return [];
   const { type, value } = obj;
   if (type === 'list' || type === 'tuple' || type === 'set') {
-    return value.filter((v) => typeof v === 'string' && v.startsWith('obj_'));
+    return (value as RtValue[]).filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
   if (type === 'dict') {
-    return value.flatMap(([k, v]) => [k, v]).filter((v) => typeof v === 'string' && v.startsWith('obj_'));
+    return (value as Array<[string, RtValue]>)
+      .flatMap(([k, v]) => [k, v])
+      .filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
   return [];
 }
 
 /**
  * Deep-clone a memory state (undo / level snapshots).
- *
- * @param {{frames: Array, heap: Object}} state
- * @returns {{frames: Array, heap: Object}}
  */
-export function cloneState(state) {
+export function cloneState(state: MemoryState): MemoryState {
   return JSON.parse(JSON.stringify(state));
 }
 
 /**
  * Structural snapshot used by goal compare (ids normalized away).
- *
- * @param {{frames: Array, heap: Object}} state
- * @returns {{frames: Array, heap: Object}}
  */
-export function snapshot(state) {
-  const heap = {};
-  const idMap = {};
+export function snapshot(state: MemoryState): Snapshot {
+  const heap: Record<string, SnapshotHeapObject> = {};
+  const idMap: Record<string, string> = {};
   for (const obj of Object.values(state.heap)) {
     idMap[obj.id] = `h_${obj.id}`;
     heap[idMap[obj.id]] = {
@@ -125,8 +122,8 @@ export function snapshot(state) {
   for (const obj of Object.values(state.heap)) {
     heap[idMap[obj.id]].value = normalizeValue(obj.value, idMap, state.heap, false);
   }
-  const frames = state.frames.map((frame) => {
-    const locals = {};
+  const frames: SnapshotFrame[] = state.frames.map((frame) => {
+    const locals: Record<string, RtValue | string> = {};
     for (const [name, targetId] of Object.entries(frame.locals)) {
       locals[name] = typeof targetId === 'string' && state.heap[targetId]
         ? idMap[targetId]
@@ -139,14 +136,13 @@ export function snapshot(state) {
 
 /**
  * Rewrite a runtime value into snapshot form.
- *
- * @param {*} value
- * @param {Object} idMap
- * @param {Object} heap
- * @param {boolean} firstPass
- * @returns {*}
  */
-function normalizeValue(value, idMap, heap, firstPass) {
+function normalizeValue(
+  value: unknown,
+  idMap: Record<string, string>,
+  heap: Record<string, HeapObject>,
+  firstPass: boolean,
+): unknown {
   if (typeof value === 'string' && value.startsWith('obj_') && heap[value]) {
     return firstPass ? idMap[value] || value : idMap[value];
   }
@@ -158,14 +154,13 @@ function normalizeValue(value, idMap, heap, firstPass) {
 
 /**
  * Build a fresh module-level state.
- *
- * @returns {{frames: Array, heap: Object, stdout: string[], errors: string[]}}
  */
-export function createModuleState() {
+export function createModuleState(): MemoryState {
   return {
-    frames: [{ name: '<module>', locals: {} }],
+    frames: [{ name: '<module>', locals: {} } as Frame],
     heap: {},
     stdout: [],
     errors: [],
+    plots: [],
   };
 }

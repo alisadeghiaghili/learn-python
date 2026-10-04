@@ -1,41 +1,31 @@
 /**
- * Recursive-descent parser for the LearnPyState Python subset.
+ * Recursive-descent parser for learn-python's Python subset.
  *
  * Produces a small AST consumed by the evaluator. Not a full CPython grammar —
  * only constructs the memory visualizer can teach well.
  */
 
-import { tokenize } from './tokenizer.js';
-
-/**
- * @typedef {{kind: string, line: number} & Object} Node
- */
+import { tokenize } from './tokenizer';
+import type { AstNode, Token, TokenType } from './types';
 
 class Parser {
-  /**
-   * @param {import('./tokenizer.js').Token[]} tokens
-   */
-  constructor(tokens) {
+  private tokens: Token[];
+  private pos: number;
+
+  constructor(tokens: Token[]) {
     this.tokens = tokens;
     this.pos = 0;
   }
 
-  /** @returns {import('./tokenizer.js').Token} */
-  peek() {
+  private peek(): Token {
     return this.tokens[this.pos];
   }
 
-  /** @returns {import('./tokenizer.js').Token} */
-  next() {
+  private next(): Token {
     return this.tokens[this.pos++];
   }
 
-  /**
-   * @param {TokenType} type
-   * @param {string} [value]
-   * @returns {import('./tokenizer.js').Token}
-   */
-  expect(type, value) {
+  private expect(type: TokenType, value?: string): Token {
     const tok = this.peek();
     if (!tok || tok.type !== type || (value !== undefined && tok.value !== value)) {
       const got = tok ? `${tok.type} ${JSON.stringify(tok.value)}` : 'EOF';
@@ -44,11 +34,7 @@ class Parser {
     return this.next();
   }
 
-  /**
-   * @param {string} value
-   * @returns {boolean}
-   */
-  eatOp(value) {
+  private eatOp(value: string): boolean {
     const tok = this.peek();
     if (tok && tok.type === 'OP' && tok.value === value) {
       this.next();
@@ -57,12 +43,9 @@ class Parser {
     return false;
   }
 
-  /**
-   * Parse a full module (sequence of simple statements / defs).
-   * @returns {Node[]}
-   */
-  parseModule() {
-    const body = [];
+  /** Parse a full module (sequence of simple statements / defs). */
+  parseModule(): AstNode[] {
+    const body: AstNode[] = [];
     while (this.peek() && this.peek().type !== 'END') {
       while (this.peek() && this.peek().type === 'NEWLINE') this.next();
       if (!this.peek() || this.peek().type === 'END') break;
@@ -75,10 +58,7 @@ class Parser {
     return body;
   }
 
-  /**
-   * @returns {Node}
-   */
-  parseStatement() {
+  private parseStatement(): AstNode {
     const tok = this.peek();
     if (!tok) throw new Error('SyntaxError: unexpected end of input');
     if (tok.type === 'KEYWORD' && tok.value === 'def') {
@@ -86,7 +66,7 @@ class Parser {
     }
     if (tok.type === 'KEYWORD' && tok.value === 'return') {
       this.next();
-      let value = null;
+      let value: AstNode | null = null;
       if (this.peek() && this.peek().type !== 'NEWLINE') {
         value = this.parseExpr();
       }
@@ -104,20 +84,41 @@ class Parser {
     return this.parseSimpleStatement();
   }
 
-  /** @returns {void} */
-  eatNewline() {
+  private eatNewline(): void {
     const tok = this.peek();
     if (tok && tok.type === 'NEWLINE') this.next();
   }
 
   /**
-   * @returns {Node}
+   * Look ahead inside an open `{`: a `{`-literal is a dict if a top-level `:`
+   * appears before the first top-level `,` or closing `}` (e.g. `{1: 2}` vs
+   * `{1, 2, 3}`). Nesting depth from `(`/`[`/`{` is tracked so a nested
+   * container's colon doesn't misfire.
    */
-  parseFunctionDef() {
+  private scanHasColonBeforeCommaOrBrace(): boolean {
+    let i = this.pos;
+    let depth = 0;
+    while (i < this.tokens.length) {
+      const t = this.tokens[i];
+      if (!t || t.type === 'END') return false;
+      if (t.type === 'OP') {
+        if (t.value === '(' || t.value === '[' || t.value === '{') depth++;
+        else if (t.value === ')' || t.value === ']' || t.value === '}') {
+          if (depth === 0) return false; // closing the set/dict itself
+          depth--;
+        } else if (depth === 0 && t.value === ':') return true;
+        else if (depth === 0 && t.value === ',') return false;
+      }
+      i++;
+    }
+    return false;
+  }
+
+  private parseFunctionDef(): AstNode {
     const tok = this.expect('KEYWORD', 'def');
     const name = this.expect('NAME').value;
     this.expect('OP', '(');
-    const params = [];
+    const params: string[] = [];
     if (!(this.peek() && this.peek().type === 'OP' && this.peek().value === ')')) {
       params.push(this.expect('NAME').value);
       while (this.eatOp(',')) params.push(this.expect('NAME').value);
@@ -126,7 +127,7 @@ class Parser {
     this.eatOp(':');
     this.expect('NEWLINE');
     this.expect('INDENT');
-    const body = [];
+    const body: AstNode[] = [];
     while (this.peek() && this.peek().type !== 'DEDENT' && this.peek().type !== 'END') {
       while (this.peek() && this.peek().type === 'NEWLINE') this.next();
       if (!this.peek() || this.peek().type === 'DEDENT' || this.peek().type === 'END') break;
@@ -136,11 +137,8 @@ class Parser {
     return { kind: 'FunctionDef', name, params, body, line: tok.line };
   }
 
-  /**
-   * Assignment, expression statement, print, augmented assign.
-   * @returns {Node}
-   */
-  parseSimpleStatement() {
+  /** Assignment, expression statement, print, augmented assign. */
+  private parseSimpleStatement(): AstNode {
     const line = this.peek().line;
     const expr = this.parseExpr();
     const tok = this.peek();
@@ -162,15 +160,11 @@ class Parser {
     return { kind: 'ExprStatement', expr, line };
   }
 
-  /**
-   * @returns {Node}
-   */
-  parseExpr() {
+  private parseExpr(): AstNode {
     return this.parseOr();
   }
 
-  /** @returns {Node} */
-  parseOr() {
+  private parseOr(): AstNode {
     let left = this.parseAnd();
     while (this.peek()?.type === 'KEYWORD' && this.peek().value === 'or') {
       const line = this.next().line;
@@ -180,8 +174,7 @@ class Parser {
     return left;
   }
 
-  /** @returns {Node} */
-  parseAnd() {
+  private parseAnd(): AstNode {
     let left = this.parseNot();
     while (this.peek()?.type === 'KEYWORD' && this.peek().value === 'and') {
       const line = this.next().line;
@@ -191,8 +184,7 @@ class Parser {
     return left;
   }
 
-  /** @returns {Node} */
-  parseNot() {
+  private parseNot(): AstNode {
     if (this.peek()?.type === 'KEYWORD' && this.peek().value === 'not') {
       const line = this.next().line;
       const operand = this.parseNot();
@@ -201,14 +193,13 @@ class Parser {
     return this.parseComparison();
   }
 
-  /** @returns {Node} */
-  parseComparison() {
+  private parseComparison(): AstNode {
     let left = this.parseAdditive();
     for (;;) {
       const tok = this.peek();
       if (!tok) break;
-      let op = null;
-      let line = tok.line;
+      let op: string | null = null;
+      const line = tok.line;
       if (tok.type === 'OP' && ['==', '!=', '<', '<=', '>', '>='].includes(tok.value)) {
         op = tok.value;
         this.next();
@@ -232,8 +223,7 @@ class Parser {
     return left;
   }
 
-  /** @returns {Node} */
-  parseAdditive() {
+  private parseAdditive(): AstNode {
     let left = this.parseMultiplicative();
     while (this.peek()?.type === 'OP' && (this.peek().value === '+' || this.peek().value === '-')) {
       const tok = this.next();
@@ -243,8 +233,7 @@ class Parser {
     return left;
   }
 
-  /** @returns {Node} */
-  parseMultiplicative() {
+  private parseMultiplicative(): AstNode {
     let left = this.parseUnary();
     while (
       this.peek()?.type === 'OP' &&
@@ -257,8 +246,7 @@ class Parser {
     return left;
   }
 
-  /** @returns {Node} */
-  parseUnary() {
+  private parseUnary(): AstNode {
     if (this.peek()?.type === 'OP' && (this.peek().value === '-' || this.peek().value === '+')) {
       const tok = this.next();
       const operand = this.parseUnary();
@@ -267,8 +255,7 @@ class Parser {
     return this.parsePostfix();
   }
 
-  /** @returns {Node} */
-  parsePostfix() {
+  private parsePostfix(): AstNode {
     let node = this.parseAtom();
     for (;;) {
       const tok = this.peek();
@@ -281,11 +268,9 @@ class Parser {
       }
       if (tok.type === 'OP' && tok.value === '[') {
         this.next();
-        let index = null;
-        let slice = false;
+        let index: AstNode | null = null;
         if (!(this.peek()?.type === 'OP' && this.peek().value === ']')) {
           if (this.peek()?.type === 'OP' && this.peek().value === ':') {
-            slice = true;
             this.next();
             const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
             this.expect('OP', ']');
@@ -294,7 +279,6 @@ class Parser {
           }
           const start = this.parseExpr();
           if (this.peek()?.type === 'OP' && this.peek().value === ':') {
-            slice = true;
             this.next();
             const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
             this.expect('OP', ']');
@@ -309,7 +293,7 @@ class Parser {
       }
       if (tok.type === 'OP' && tok.value === '(') {
         this.next();
-        const args = [];
+        const args: AstNode[] = [];
         if (!(this.peek()?.type === 'OP' && this.peek().value === ')')) {
           args.push(this.parseExpr());
           while (this.eatOp(',')) {
@@ -326,8 +310,7 @@ class Parser {
     return node;
   }
 
-  /** @returns {Node} */
-  parseAtom() {
+  private parseAtom(): AstNode {
     const tok = this.peek();
     if (!tok) throw new Error('SyntaxError: unexpected end of input');
 
@@ -366,7 +349,7 @@ class Parser {
       }
       const first = this.parseExpr();
       if (this.eatOp(',')) {
-        const elts = [first];
+        const elts: AstNode[] = [first];
         while (this.peek() && !(this.peek().type === 'OP' && this.peek().value === ')')) {
           elts.push(this.parseExpr());
           if (!this.eatOp(',')) break;
@@ -379,7 +362,7 @@ class Parser {
     }
     if (tok.type === 'OP' && tok.value === '[') {
       this.next();
-      const elts = [];
+      const elts: AstNode[] = [];
       if (!(this.peek()?.type === 'OP' && this.peek().value === ']')) {
         elts.push(this.parseExpr());
         while (this.eatOp(',')) {
@@ -392,9 +375,16 @@ class Parser {
     }
     if (tok.type === 'OP' && tok.value === '{') {
       this.next();
-      const keys = [];
-      const values = [];
-      if (!(this.peek()?.type === 'OP' && this.peek().value === '}')) {
+      if (this.peek()?.type === 'OP' && this.peek().value === '}') {
+        this.next();
+        // {} is the empty dict in Python; empty sets must be built with set().
+        return { kind: 'Dict', keys: [], values: [], line: tok.line };
+      }
+      // Set vs dict: a dict's first entry has a `:` before any `,` or `}`.
+      const isDict = this.scanHasColonBeforeCommaOrBrace();
+      if (isDict) {
+        const keys: AstNode[] = [];
+        const values: AstNode[] = [];
         for (;;) {
           keys.push(this.parseExpr());
           this.expect('OP', ':');
@@ -402,12 +392,17 @@ class Parser {
           if (!this.eatOp(',')) break;
           if (this.peek()?.type === 'OP' && this.peek().value === '}') break;
         }
+        this.expect('OP', '}');
+        return { kind: 'Dict', keys, values, line: tok.line };
+      }
+      const elts: AstNode[] = [];
+      for (;;) {
+        elts.push(this.parseExpr());
+        if (!this.eatOp(',')) break;
+        if (this.peek()?.type === 'OP' && this.peek().value === '}') break;
       }
       this.expect('OP', '}');
-      return { kind: 'Dict', keys, values, line: tok.line };
-    }
-    if (tok.type === 'OP' && tok.value === '(') {
-      // handled above
+      return { kind: 'Set', elts, line: tok.line };
     }
     throw new Error(`SyntaxError: unexpected token ${JSON.stringify(tok.value)} at line ${tok.line}`);
   }
@@ -416,11 +411,9 @@ class Parser {
 /**
  * Parse source into an AST statement list.
  *
- * @param {string} source
- * @returns {Node[]}
  * @throws {Error} on syntax errors
  */
-export function parse(source) {
+export function parse(source: string): AstNode[] {
   const tokens = tokenize(source);
   return new Parser(tokens).parseModule();
 }
