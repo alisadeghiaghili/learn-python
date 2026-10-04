@@ -26,12 +26,28 @@ export function run(source: string, state: MemoryState): MemoryState {
     for (const stmt of ast) {
       execStatement(stmt, state);
     }
+    // A nested child may have been mutated in place (e.g. a[1].append(3)),
+    // leaving a parent container's cached repr stale. Recompute container
+    // reprs so display, print, and goal checks all see the current value.
+    refreshReprs(state);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     state.errors.push(message);
     throw err;
   }
   return state;
+}
+
+/**
+ * Recompute the cached `repr` of every container heap object so parents reflect
+ * nested in-place mutations. Cheap: containers only, no allocation.
+ */
+function refreshReprs(state: MemoryState): void {
+  for (const obj of Object.values(state.heap)) {
+    if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set') {
+      obj.repr = formatObject(obj, state);
+    }
+  }
 }
 
 /**
@@ -77,6 +93,13 @@ function execStatement(node: AstNode, state: MemoryState): void {
       // Store as a named frame binding to a code object; also keep callables in heap.
       setFrameLocal(currentFrame(state), node.name, fn.id);
       state.heap[fn.id] = fn;
+      return;
+    }
+    case 'Import': {
+      const mod = allocObject('module', { name: node.name }, `<module '${node.name}'>`);
+      state.heap[mod.id] = mod;
+      const localName = node.alias ?? node.name.split('.')[0];
+      setFrameLocal(currentFrame(state), localName, mod.id);
       return;
     }
     case 'Pass':
@@ -382,6 +405,13 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
   const obj = state.heap[objId as string];
   if (!obj) throw new Error(`TypeError: bad method target (line ${line})`);
 
+  if (obj.type === 'module' && (obj.value as { name: string }).name === 'copy') {
+    if (args.length !== 1) throw new Error(`TypeError: copy() takes exactly one argument (line ${line})`);
+    if (method === 'copy') return shallowClone(args[0], state, line);
+    if (method === 'deepcopy') return deepClone(args[0], state, line);
+    throw new Error(`AttributeError: module 'copy' has no attribute '${method}' (line ${line})`);
+  }
+
   if (obj.type === 'list') {
     const value = obj.value as RtValue[];
     if (method === 'append') {
@@ -469,6 +499,12 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
       obj.repr = formatObject(obj, state);
       return v;
     }
+    if (method === 'copy') {
+      const clone = allocObject('dict', entries.map(([k, v]) => [k, v] as [string, RtValue]), '');
+      state.heap[clone.id] = clone;
+      clone.repr = formatObject(clone, state);
+      return clone.id;
+    }
   }
 
   if (obj.type === 'str') {
@@ -488,6 +524,59 @@ function allocString(s: string, state: MemoryState): string {
   const obj = allocObject('str', s, formatStr(s));
   state.heap[obj.id] = obj;
   return obj.id;
+}
+
+/**
+ * Shallow clone a heap container: a new outer box whose nested container slots
+ * point at the SAME child objects (Python `copy.copy` / `.copy()` semantics).
+ */
+function shallowClone(srcId: RtValue, state: MemoryState, line: number): RtValue {
+  if (typeof srcId !== 'string' || !state.heap[srcId]) {
+    throw new Error(`TypeError: argument of type '${typeName(srcId, state)}' is not a container (line ${line})`);
+  }
+  const src = state.heap[srcId];
+  const obj = allocObject(src.type, cloneContainerValue(src.type, src.value, state, false), '');
+  state.heap[obj.id] = obj;
+  obj.repr = formatObject(obj, state);
+  return obj.id;
+}
+
+/**
+ * Deep clone a heap container: a new outer box whose nested containers are
+ * themselves cloned (Python `copy.deepcopy` semantics).
+ */
+function deepClone(srcId: RtValue, state: MemoryState, line: number): RtValue {
+  if (typeof srcId !== 'string' || !state.heap[srcId]) {
+    throw new Error(`TypeError: argument of type '${typeName(srcId, state)}' is not a container (line ${line})`);
+  }
+  const src = state.heap[srcId];
+  const obj = allocObject(src.type, cloneContainerValue(src.type, src.value, state, true), '');
+  state.heap[obj.id] = obj;
+  obj.repr = formatObject(obj, state);
+  return obj.id;
+}
+
+/**
+ * Rebuild a container's `value`, cloning nested containers in place.
+ * When `deep` is false, nested containers are reused (their ids pass through);
+ * when true, each nested container gets its own fresh (recursively cloned) box.
+ */
+function cloneContainerValue(type: string, value: unknown, state: MemoryState, deep: boolean): unknown {
+  const cloneChild = (child: RtValue): RtValue =>
+    typeof child === 'string' && state.heap[child] && isContainer(state.heap[child].type) && deep
+      ? deepClone(child, state, 0)
+      : child;
+  if (type === 'list' || type === 'tuple' || type === 'set') {
+    return (value as RtValue[]).map(cloneChild);
+  }
+  if (type === 'dict') {
+    return (value as Array<[string, RtValue]>).map(([k, v]) => [k, cloneChild(v)] as [string, RtValue]);
+  }
+  return value;
+}
+
+function isContainer(type: string): boolean {
+  return type === 'list' || type === 'tuple' || type === 'set' || type === 'dict';
 }
 
 /**
@@ -747,6 +836,19 @@ function formatObject(obj: HeapObject, state: MemoryState): string {
 }
 
 /**
+ * Live repr for a heap object. Containers are recomputed from their current
+ * `value` so that a parent reflects a nested child's in-place mutation
+ * (e.g. `a[1].append(3)` shows up in `print(a)`); scalars/strings/functions
+ * use their stored repr.
+ */
+export function liveRepr(obj: HeapObject, state: MemoryState): string {
+  if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set') {
+    return formatObject(obj, state);
+  }
+  return obj.repr;
+}
+
+/**
  * Human-facing display of a runtime value (repr-style).
  */
 export function displayValue(v: RtValue, state: MemoryState): string {
@@ -754,7 +856,7 @@ export function displayValue(v: RtValue, state: MemoryState): string {
   if (typeof v === 'boolean') return v ? 'True' : 'False';
   if (typeof v === 'number') return String(v);
   if (typeof v === 'string' && state.heap[v]) {
-    return state.heap[v].repr || formatObject(state.heap[v], state);
+    return liveRepr(state.heap[v], state);
   }
   if (typeof v === 'string') return formatStr(v);
   return String(v);
@@ -769,7 +871,7 @@ function printArg(v: RtValue, state: MemoryState): string {
   if (typeof v === 'number') return String(v);
   if (typeof v === 'string' && state.heap[v]) {
     const obj = state.heap[v];
-    return obj.type === 'str' ? (obj.value as string) : (obj.repr || formatObject(obj, state));
+    return obj.type === 'str' ? (obj.value as string) : liveRepr(obj, state);
   }
   if (typeof v === 'string') return v;
   return String(v);

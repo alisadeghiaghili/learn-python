@@ -78,6 +78,9 @@ class Parser {
       this.eatNewline();
       return { kind: 'Pass', line: tok.line };
     }
+    if (tok.type === 'KEYWORD' && tok.value === 'import') {
+      return this.parseImport();
+    }
     if (tok.type === 'KEYWORD' && (tok.value === 'if' || tok.value === 'while' || tok.value === 'for')) {
       throw new Error('SyntaxError: control flow is not supported in v0');
     }
@@ -135,6 +138,20 @@ class Parser {
     }
     this.expect('DEDENT');
     return { kind: 'FunctionDef', name, params, body, line: tok.line };
+  }
+
+  /** `import x`, `import x.y`, or `import x as z`. (from-imports are v1.) */
+  private parseImport(): AstNode {
+    const tok = this.expect('KEYWORD', 'import');
+    const parts: string[] = [this.expect('NAME').value];
+    while (this.eatOp('.')) parts.push(this.expect('NAME').value);
+    let alias: string | null = null;
+    if (this.peek()?.type === 'KEYWORD' && this.peek().value === 'as') {
+      this.next();
+      alias = this.expect('NAME').value;
+    }
+    this.eatNewline();
+    return { kind: 'Import', name: parts.join('.'), alias, line: tok.line };
   }
 
   /** Assignment, expression statement, print, augmented assign. */

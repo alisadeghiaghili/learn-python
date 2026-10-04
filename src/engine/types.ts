@@ -175,6 +175,13 @@ export interface FunctionDefNode extends BaseNode {
 export interface PassNode extends BaseNode {
   kind: 'Pass';
 }
+export interface ImportNode extends BaseNode {
+  kind: 'Import';
+  /** Dotted module path, e.g. 'copy' or 'os.path'. */
+  name: string;
+  /** Alias from `as`; null if the (first) module name is bound directly. */
+  alias: string | null;
+}
 
 export type AstNode =
   | LiteralNode
@@ -196,7 +203,8 @@ export type AstNode =
   | ExprStatementNode
   | ReturnNode
   | FunctionDefNode
-  | PassNode;
+  | PassNode
+  | ImportNode;
 
 /* —— Goals / checks —— */
 

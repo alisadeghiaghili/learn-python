@@ -41,7 +41,7 @@ Type Python-subset statements. Meta-commands:
 | Command | Effect |
 |---------|--------|
 | `help` | subset + meta overview |
-| `levels` | list the 24 levels / 6 series |
+| `levels` | list the 27 levels / 7 series |
 | `level <id>` | load a level (e.g. `level first-name`) |
 | `lesson` | open the current level's lesson text |
 | `goal` / `guide` | focus the right-hand guide panel |
@@ -63,17 +63,20 @@ A deliberately small, pedagogically sharp subset — not CPython:
 - **Methods:** `.append` `.insert` `.extend` `.pop` `.remove` `.copy` `.get` `.update` `.keys` `.clear`
 - **Functions:** `def` / call / `return`, local frames, nested calls
 - **Builtins:** `print` `len` `type` `id` `str` `int` `bool` `list` `dict` `set`
+- **Modules:** `import copy as cp` — `cp.copy` (shallow) and `cp.deepcopy`
 - **Plotting:** `scatter(xs, ys, "title")` `line(xs, ys, "title")`
 - **Operators:** arithmetic, comparisons, `is`, `==`
 
-Not in v0: classes, imports, exceptions (beyond clean parse/runtime errors), comprehensions, I/O, async, `range`/`sorted`/`min`/`max`/`abs`, full CPython semantics.
+Not in v0: classes, real module imports (only the simulated `copy`), control flow (`if`/`for`/`while`), exceptions (beyond clean parse/runtime errors), comprehensions, I/O, async, `range`/`sorted`/`min`/`max`/`abs`, full CPython semantics.
+
+A planned curriculum extends this with numpy, pandas, re, datetime and more — all drawn on the same memory canvas. See `docs/ENGINE-EXTENSION.md` and `docs/adr/002-library-modules.md`.
 
 ## Architecture
 
 ```
 src/engine/    simulated runtime (tokenizer, parser, evaluator, memory, session)
                + goal checks (checks.ts) — the "TreeCompare" analogue
-src/levels/    6-series / 24-level catalog + per-level goals, par, solutions
+src/levels/    7-series / 27-level catalog + per-level goals, par, solutions
 src/ui/        app shell, memory canvas, plot board, REPL, dialog, script editor
 src/style.css  design tokens + layout
 tests/         vitest unit + level-solution tests
@@ -85,7 +88,7 @@ The engine is intentionally a **teaching subset**, not CPython. Every state tran
 
 ## Levels
 
-Six series — Names & Bindings, Aliasing & Copy, Containers in Memory, Mutation & Methods, Functions & Frames, Plotting & Capstone. Each of the 24 levels has a brief, optional hint, a goal (predicate or target snapshot), a statement-par for golf, and a worked solution.
+Seven series — Names & Bindings, Aliasing & Copy, Containers in Memory, **Copy Semantics** (shallow vs deep), Mutation & Methods, Functions & Frames, Plotting & Capstone. Each of the 27 levels has a brief, optional hint, a goal (predicate or target snapshot), a statement-par for golf, and a worked solution.
 
 ## Tech
 

@@ -25,17 +25,24 @@ Supported subset (deliberately small, pedagogically sharp):
 - `list`, `dict`, `tuple`, `set`, indexing, slicing, `.append` / `.pop` / `.update`
 - Function `def` / call / `return`, local frames, nested calls
 - `print`, `type`, `id`, `len`, `is`, `==`, arithmetic, comparisons
+- `import copy as cp` (simulated module) → `cp.copy` (shallow) / `cp.deepcopy`
 - Plotting: `scatter(xs, ys, "title")` / `line(xs, ys, "title")` → SVG board
 - Meta: `help`, `levels`, `level`, `goal`, `hint`, `solution`, `undo`, `reset`, `golf`, `script`
 
-Out of scope v0: classes/OOP, imports, exceptions (except parse/runtime errors shown cleanly), comprehensions beyond simple cases, I/O, async, `range`/`sorted`/`min`/`max`/`abs`.
+Out of scope v0: classes/OOP, real imports (only the simulated `copy` module), control flow
+(`if`/`for`/`while`), exceptions (except parse/runtime errors shown cleanly), comprehensions beyond
+simple cases, I/O, async, `range`/`sorted`/`min`/`max`/`abs`.
+
+A planned curriculum (numpy, pandas, re, datetime, …) extends the same engine — each library is a
+simulated module whose data structures are first-class heap objects on this canvas. See
+`docs/ENGINE-EXTENSION.md` and `docs/adr/002-library-modules.md`.
 
 ## Architecture
 
 ```
 src/engine/    simulated Python runtime (tokenizer, parser, evaluator, memory,
                session) + goal checks (checks.ts) — the TreeCompare analogue
-src/levels/    6-series / 24-level catalog + per-level goals, par, solutions
+src/levels/    7-series / 27-level catalog + per-level goals, par, solutions
 src/ui/        app shell, memory canvas, plot board, REPL, dialog, script editor
 src/style.css  design tokens + layout
 index.html     app shell entry
