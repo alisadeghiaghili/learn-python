@@ -1,4 +1,4 @@
-# LearnPyState — ADR 001: Simulated Python subset, not CPython
+# learn-python — ADR 001: Simulated Python subset, not CPython
 
 ## Status
 
@@ -17,7 +17,7 @@ Options for executing learner Python in the browser:
 
 ## Decision
 
-Implement a deliberate Python **subset** (`js/engine/*`) that models heap identity and frame locals explicitly. Not CPython. Document unsupported syntax (`if`, `for`, classes, imports) as hard errors in v0.
+Implement a deliberate Python **subset** (`src/engine/*`) that models heap identity and frame locals explicitly. Not CPython. Document unsupported syntax (`if`, `for`, classes, imports) as hard errors in v0.
 
 ## Consequences
 

@@ -1,11 +1,19 @@
 {
   "name": "learn-python",
-  "version": "0.2.0",
-  "description": "Interactive Python memory visualizer, sandbox, and challenge levels",
+  "version": "0.3.0",
+  "description": "Interactive Python memory model visualizer, sandbox, and challenge levels",
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node --test tests/engine.test.js tests/levels.test.js tests/smoke.test.js",
-    "start": "node ./scripts/serve.js"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.2.1",
+    "vitest": "^3.0.8"
   }
 }
