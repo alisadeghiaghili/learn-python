@@ -158,3 +158,68 @@ describe('engine', () => {
     expect(checkGoal(goal, snapshot(none), none).ok).toBe(false);
   });
 });
+
+describe('import + copy/deepcopy (Phase 0a)', () => {
+  test('import binds a module object', () => {
+    const state = runFresh('import copy as cp');
+    const id = state.frames[0].locals.cp as string;
+    expect(state.heap[id].type).toBe('module');
+    expect(state.heap[id].repr).toBe("<module 'copy'>");
+  });
+
+  test('bare import binds the module name', () => {
+    const state = runFresh('import copy');
+    const id = state.frames[0].locals.copy as string;
+    expect(state.heap[id].type).toBe('module');
+  });
+
+  test('cp.copy shallow-copies: new outer, shared nested child', () => {
+    const state = runFresh('import copy as cp\na = {"k": [1, 2]}\nb = cp.copy(a)');
+    const a = state.frames[0].locals.a as string;
+    const b = state.frames[0].locals.b as string;
+    expect(a).not.toBe(b); // different dict boxes
+    expect(state.heap[a].type).toBe('dict');
+    expect(state.heap[b].type).toBe('dict');
+    // both dicts point at the SAME inner list
+    const innerOf = (id: string) => (state.heap[id].value as Array<[string, string]>)[0]![1];
+    expect(innerOf(a)).toBe(innerOf(b));
+    expect(state.heap[innerOf(a)].type).toBe('list');
+  });
+
+  test('cp.deepcopy is fully independent: no shared child', () => {
+    const state = runFresh('import copy as cp\na = {"k": [1, 2]}\nc = cp.deepcopy(a)');
+    const a = state.frames[0].locals.a as string;
+    const c = state.frames[0].locals.c as string;
+    expect(a).not.toBe(c);
+    const innerOf = (id: string) => (state.heap[id].value as Array<[string, string]>)[0]![1];
+    expect(innerOf(a)).not.toBe(innerOf(c)); // independent inner lists
+  });
+
+  test('deepcopy of a nested list is independent', () => {
+    const state = runFresh('import copy as cp\na = [1, [2, 3]]\nc = cp.deepcopy(a)');
+    const a = state.frames[0].locals.a as string;
+    const c = state.frames[0].locals.c as string;
+    const innerOf = (id: string) => (state.heap[id].value as string[])[1]!;
+    expect(innerOf(a)).not.toBe(innerOf(c));
+  });
+
+  test('sharesChild: true for shallow copy, false for deep copy', () => {
+    const shallow = runFresh('import copy as cp\na = {"k": [1, 2]}\nb = cp.copy(a)');
+    expect(preds.sharesChild('a', 'b')(snapshot(shallow), shallow)).toBe(true);
+    const deep = runFresh('import copy as cp\na = {"k": [1, 2]}\nc = cp.deepcopy(a)');
+    expect(preds.sharesChild('a', 'c')(snapshot(deep), deep)).toBe(false);
+  });
+
+  test('independent: false for shallow copy, true for deep copy', () => {
+    const shallow = runFresh('import copy as cp\na = {"k": [1, 2]}\nb = cp.copy(a)');
+    expect(preds.independent('a', 'b')(snapshot(shallow), shallow)).toBe(false);
+    const deep = runFresh('import copy as cp\na = {"k": [1, 2]}\nc = cp.deepcopy(a)');
+    expect(preds.independent('a', 'c')(snapshot(deep), deep)).toBe(true);
+  });
+
+  test('shallow .copy() shares the nested list; mutating through one is seen by the other', () => {
+    const state = runFresh('a = [1, [2]]\nb = a.copy()\na[1].append(3)');
+    expect(state.heap[state.frames[0].locals.a as string].repr).toBe('[1, [2, 3]]');
+    expect(state.heap[state.frames[0].locals.b as string].repr).toBe('[1, [2, 3]]');
+  });
+});

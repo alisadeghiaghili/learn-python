@@ -2,7 +2,7 @@
  * Goal checking for levels (analogue of LGB TreeCompare).
  */
 
-import type { GoalResult, GoalSpec, MemoryState, Snapshot } from './types';
+import type { GoalResult, GoalSpec, MemoryState, Snapshot, SnapshotHeapObject } from './types';
 
 /**
  * Deep structural equality of two snapshot fragments.
@@ -235,4 +235,90 @@ export const preds = {
       return true;
     };
   },
+
+  /**
+   * Two names are different objects that still share at least one nested
+   * container (a shallow copy: new outer box, same child).
+   */
+  sharesChild(name: string, other: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const shared = sharedChildId(name, other, snapshot);
+      if (shared === 'missing') return `Bind both '${name}' and '${other}'.`;
+      if (shared === 'same') return `'${name}' and '${other}' are the same object — copy it.`;
+      return shared !== null;
+    };
+  },
+
+  /**
+   * Two names are different objects with no shared nested container (a deep
+   * copy: every level is independent).
+   */
+  independent(name: string, other: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const shared = sharedChildId(name, other, snapshot);
+      if (shared === 'missing') return `Bind both '${name}' and '${other}'.`;
+      if (shared === 'same') return `'${name}' and '${other}' are the same object — make independent copies.`;
+      return shared === null;
+    };
+  },
 };
+
+/**
+ * Shared helper for sharesChild / independent.
+ * Returns 'missing' if either name is unbound, 'same' if they alias one object,
+ * a truthy id-string if they share a nested container, or null if fully independent.
+ */
+function sharedChildId(name: string, other: string, snapshot: Snapshot): string | 'missing' | 'same' | null {
+  const module = snapshot.frames[snapshot.frames.length - 1];
+  if (!module) return 'missing';
+  const a = module.locals[name];
+  const b = module.locals[other];
+  if (!a || !b) return 'missing';
+  if (a === b) return 'same';
+  const shared = findSharedChild(a as string, b as string, snapshot);
+  return shared ?? null;
+}
+
+/**
+ * BFS over each object's nested container references; the first nested id that
+ * appears under both objects is a shared child.
+ */
+function findSharedChild(idA: string, idB: string, snapshot: Snapshot): string | null {
+  const reach = (start: string): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [start];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      const obj = snapshot.heap[cur];
+      if (!obj) continue;
+      for (const ref of nestedRefsOf(obj)) {
+        if (seen.has(ref)) continue;
+        seen.add(ref);
+        queue.push(ref);
+      }
+    }
+    seen.delete(start);
+    return seen;
+  };
+  const reachB = reach(idB);
+  for (const ref of reach(idA)) {
+    if (reachB.has(ref)) return ref;
+  }
+  return null;
+}
+
+/** Nested container ids stored inside a snapshot heap object. */
+function nestedRefsOf(obj: SnapshotHeapObject): string[] {
+  const { type, value } = obj;
+  const isRef = (v: unknown): v is string => typeof v === 'string' && v.startsWith('h_obj_');
+  const refs: string[] = [];
+  if (type === 'list' || type === 'tuple' || type === 'set') {
+    for (const v of value as unknown[]) if (isRef(v)) refs.push(v);
+    return refs;
+  }
+  if (type === 'dict') {
+    for (const [, v] of value as Array<[string, unknown]>) if (isRef(v)) refs.push(v);
+    return refs;
+  }
+  return refs;
+}
