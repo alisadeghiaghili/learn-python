@@ -38,6 +38,8 @@ const BASE_COMMANDS = [
   'import copy as cp',
   'b = cp.copy(a)',
   'b = cp.deepcopy(a)',
+  'it = iter(a)',
+  'x = next(it)',
   'print("hello", 3)',
   'len(a)',
   'type(a)',
