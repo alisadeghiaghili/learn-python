@@ -130,6 +130,11 @@ function containerRefs(obj: { type: string; value: unknown }): string[] {
   if (type === 'dict') {
     return (value as Array<[string, RtValue]>).flatMap(([, v]) => (typeof v === 'string' && v.startsWith('obj_') ? [v] : []));
   }
+  // iterator → the iterable it walks
+  if (typeof value === 'object' && value !== null && 'source' in value) {
+    const s = (value as { source: unknown }).source;
+    return typeof s === 'string' && s.startsWith('obj_') ? [s] : [];
+  }
   return [];
 }
 
@@ -208,6 +213,10 @@ function drawObject(svg: SVGSVGElement, x: number, y: number, w: number, h: numb
       const label = `${k}: ${cellLabel(v, obj, i)}`;
       addText(g, x + 14, y + 42 + i * OBJ_ROW_H, label, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
     });
+  } else if (typeof obj.value === 'object' && obj.value !== null && 'index' in (obj.value as object)) {
+    // iterator: show its target and current cursor
+    const itv = obj.value as { source: string; index: number };
+    addText(g, x + 14, y + 32, `→ ${itv.source} · i=${itv.index}`, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else if (obj.type === 'str') {
     addText(g, x + 14, y + 32, obj.repr, COLORS.ink, 13, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else {

@@ -303,6 +303,12 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
     if (name === 'bool') {
       return truthy(args[0], state);
     }
+    if (name === 'iter') {
+      return makeIterator(args[0], state, node.line);
+    }
+    if (name === 'next') {
+      return nextIterator(args[0], state, node.line);
+    }
     if (name === 'list') {
       const obj = allocObject('list', Array.isArray(args[0]) ? [...(args[0] as unknown as RtValue[])] : [], '');
       state.heap[obj.id] = obj;
@@ -577,6 +583,56 @@ function cloneContainerValue(type: string, value: unknown, state: MemoryState, d
 
 function isContainer(type: string): boolean {
   return type === 'list' || type === 'tuple' || type === 'set' || type === 'dict';
+}
+
+/**
+ * Iterator object value: a reference to the iterable it walks plus a cursor.
+ */
+interface IteratorValue {
+  source: string;
+  index: number;
+}
+
+function isIterableType(type: string): boolean {
+  return type === 'list' || type === 'tuple' || type === 'set' || type === 'str';
+}
+
+function isIteratorType(type: string): boolean {
+  return type.endsWith('iter');
+}
+
+/** `iter(x)` → a fresh stateful iterator object over container `x`. */
+function makeIterator(v: RtValue, state: MemoryState, line: number): RtValue {
+  if (typeof v !== 'string' || !state.heap[v]) {
+    throw new Error(`TypeError: '${typeName(v, state)}' object is not iterable (line ${line})`);
+  }
+  const src = state.heap[v];
+  if (!isIterableType(src.type)) {
+    throw new Error(`TypeError: '${src.type}' object is not iterable (line ${line})`);
+  }
+  const obj = allocObject(src.type + 'iter', { source: v, index: 0 } as IteratorValue, `<${src.type}_iterator>`);
+  state.heap[obj.id] = obj;
+  return obj.id;
+}
+
+/** `next(it)` → advance the cursor one step and return the element. */
+function nextIterator(v: RtValue, state: MemoryState, line: number): RtValue {
+  if (typeof v !== 'string' || !state.heap[v] || !isIteratorType(state.heap[v].type)) {
+    throw new Error(`TypeError: argument of type '${typeName(v, state)}' is not an iterator (line ${line})`);
+  }
+  const obj = state.heap[v];
+  const itv = obj.value as IteratorValue;
+  const src = state.heap[itv.source];
+  if (!src) throw new Error(`RuntimeError: iterator source was released (line ${line})`);
+  const len = src.type === 'str' ? (src.value as string).length : (src.value as RtValue[]).length;
+  if (itv.index >= len) {
+    throw new Error(`StopIteration (line ${line})`);
+  }
+  const elem = src.type === 'str'
+    ? allocString((src.value as string)[itv.index]!, state)
+    : (src.value as RtValue[])[itv.index]!;
+  itv.index += 1;
+  return elem;
 }
 
 /**
