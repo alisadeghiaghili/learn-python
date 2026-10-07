@@ -10,10 +10,10 @@ import { checkGoal } from '../src/engine/checks';
 import { allLevels, sequences } from '../src/levels/index';
 import { countStatements } from '../src/ui/app';
 
-test('catalog is well-formed: 27 levels across 7 series, unique ids, valid difficulty', () => {
+test('catalog is well-formed: 31 levels across 8 series, unique ids, valid difficulty', () => {
   const levels = allLevels();
-  expect(sequences.length).toBe(7);
-  expect(levels.length).toBe(27);
+  expect(sequences.length).toBe(8);
+  expect(levels.length).toBe(31);
 
   const ids = new Set(levels.map((l) => l.id));
   expect(ids.size, 'duplicate level ids').toBe(levels.length);

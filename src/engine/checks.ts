@@ -261,7 +261,61 @@ export const preds = {
       return shared === null;
     };
   },
+
+  /** `name` is an iterator whose source is the same object as `iterable`. */
+  iteratesOver(name: string, iterable: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const itv = iteratorValue(name, snapshot);
+      if (!itv) return `Create an iterator '${name}' with iter().`;
+      const module = snapshot.frames[snapshot.frames.length - 1]!;
+      const src = module.locals[iterable];
+      if (!src) return `Bind '${iterable}' first.`;
+      return itv.source === src ? true : `'${name}' must iterate over the object '${iterable}' points at.`;
+    };
+  },
+
+  /** `name` is an iterator whose cursor is at exactly `i`. */
+  iteratorIndex(name: string, i: number) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const itv = iteratorValue(name, snapshot);
+      if (!itv) return `Create an iterator '${name}' with iter().`;
+      return itv.index === i ? true : `'${name}' is at index ${itv.index}, expected ${i}.`;
+    };
+  },
+
+  /** `name` is an iterator already at the end of its source. */
+  exhausted(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const itv = iteratorValue(name, snapshot);
+      if (!itv) return `Create an iterator '${name}' with iter().`;
+      const len = iteratorSourceLength(itv.source, snapshot);
+      if (len === null) return 'Cannot measure the iterator source.';
+      return itv.index >= len;
+    };
+  },
 };
+
+/** Read an iterator's `{ source, index }` from the normalized snapshot. */
+function iteratorValue(name: string, snapshot: Snapshot): { source: string; index: number } | null {
+  const module = snapshot.frames[snapshot.frames.length - 1];
+  if (!module) return null;
+  const id = module.locals[name];
+  if (typeof id !== 'string' || !snapshot.heap[id]) return null;
+  const obj = snapshot.heap[id];
+  if (!obj.type.endsWith('iter')) return null;
+  const v = obj.value as { source?: string; index?: number } | undefined;
+  if (!v || typeof v.source !== 'string' || typeof v.index !== 'number') return null;
+  return { source: v.source, index: v.index };
+}
+
+/** Length of the object an iterator points at, or null if unknown. */
+function iteratorSourceLength(id: string, snapshot: Snapshot): number | null {
+  const obj = snapshot.heap[id];
+  if (!obj) return null;
+  if (obj.type === 'str') return (obj.value as string).length;
+  if (['list', 'tuple', 'set'].includes(obj.type)) return (obj.value as unknown[]).length;
+  return null;
+}
 
 /**
  * Shared helper for sharesChild / independent.

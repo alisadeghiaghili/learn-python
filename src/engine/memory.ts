@@ -94,6 +94,12 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
       .flatMap(([k, v]) => [k, v])
       .filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
+  // An iterator holds a reference to the iterable it walks — keep that source
+  // alive and let the canvas draw the iterator → source edge.
+  if (typeof value === 'object' && value !== null && 'source' in value) {
+    const s = (value as { source: unknown }).source;
+    return typeof s === 'string' && s.startsWith('obj_') ? [s] : [];
+  }
   return [];
 }
 
@@ -148,6 +154,14 @@ function normalizeValue(
   }
   if (Array.isArray(value)) {
     return value.map((v) => normalizeValue(v, idMap, heap, firstPass));
+  }
+  // An iterator's value is an object holding a `source` id — remap it so the
+  // normalized snapshot can compare it against other objects.
+  if (typeof value === 'object' && value !== null && 'source' in value) {
+    const s = (value as { source: unknown }).source;
+    if (typeof s === 'string' && heap[s]) {
+      return { ...(value as object), source: idMap[s] };
+    }
   }
   return value;
 }

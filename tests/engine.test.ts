@@ -223,3 +223,49 @@ describe('import + copy/deepcopy (Phase 0a)', () => {
     expect(state.heap[state.frames[0].locals.b as string].repr).toBe('[1, [2, 3]]');
   });
 });
+
+describe('iterators (Phase 0b)', () => {
+  test('iter() returns a stateful iterator over the source', () => {
+    const state = runFresh('xs = [1, 2, 3]\nit = iter(xs)');
+    const id = state.frames[0].locals.it as string;
+    const src = state.frames[0].locals.xs as string;
+    const o = state.heap[id];
+    expect(o.type).toBe('listiter');
+    expect((o.value as { source: string }).source).toBe(src);
+    expect((o.value as { index: number }).index).toBe(0);
+  });
+
+  test('next() advances the iterator one step at a time', () => {
+    const state = runFresh('xs = [1, 2, 3]\nit = iter(xs)\na = next(it)\nb = next(it)');
+    expect(state.frames[0].locals.a).toBe(1);
+    expect(state.frames[0].locals.b).toBe(2);
+    const it = state.frames[0].locals.it as string;
+    expect((state.heap[it].value as { index: number }).index).toBe(2);
+  });
+
+  test('two iterators over the same list are independent objects', () => {
+    const state = runFresh('xs = [1, 2]\nit = iter(xs)\njt = iter(xs)\nnext(it)');
+    const it = state.frames[0].locals.it as string;
+    const jt = state.frames[0].locals.jt as string;
+    const src = state.frames[0].locals.xs as string;
+    expect(it).not.toBe(jt);
+    expect((state.heap[it].value as { source: string }).source).toBe(src);
+    expect((state.heap[jt].value as { source: string }).source).toBe(src);
+    expect((state.heap[it].value as { index: number }).index).toBe(1);
+    expect((state.heap[jt].value as { index: number }).index).toBe(0);
+  });
+
+  test('next() on an exhausted iterator raises StopIteration', () => {
+    expect(() => runFresh('it = iter([])\nnext(it)')).toThrow(/StopIteration/);
+    expect(() => runFresh('xs = [1]\nit = iter(xs)\nnext(it)\nnext(it)')).toThrow(/StopIteration/);
+  });
+
+  test('iterator predicates: iteratesOver, iteratorIndex, exhausted', () => {
+    const state = runFresh('xs = [1, 2, 3]\nit = iter(xs)\nnext(it)');
+    expect(preds.iteratesOver('it', 'xs')(snapshot(state), state)).toBe(true);
+    expect(preds.iteratorIndex('it', 1)(snapshot(state), state)).toBe(true);
+    const done = runFresh('xs = [1]\nit = iter(xs)\nnext(it)');
+    expect(preds.exhausted('it')(snapshot(done), done)).toBe(true);
+    expect(preds.exhausted('it')(snapshot(state), state)).toBe(false);
+  });
+});

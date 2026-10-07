@@ -41,7 +41,7 @@ Type Python-subset statements. Meta-commands:
 | Command | Effect |
 |---------|--------|
 | `help` | subset + meta overview |
-| `levels` | list the 27 levels / 7 series |
+| `levels` | list the 31 levels / 8 series |
 | `level <id>` | load a level (e.g. `level first-name`) |
 | `lesson` | open the current level's lesson text |
 | `goal` / `guide` | focus the right-hand guide panel |
@@ -64,6 +64,7 @@ A deliberately small, pedagogically sharp subset — not CPython:
 - **Functions:** `def` / call / `return`, local frames, nested calls
 - **Builtins:** `print` `len` `type` `id` `str` `int` `bool` `list` `dict` `set`
 - **Modules:** `import copy as cp` — `cp.copy` (shallow) and `cp.deepcopy`
+- **Iterators:** `iter(x)` and `next(it)` — a stateful iterator object you advance by hand
 - **Plotting:** `scatter(xs, ys, "title")` `line(xs, ys, "title")`
 - **Operators:** arithmetic, comparisons, `is`, `==`
 
@@ -76,7 +77,7 @@ A planned curriculum extends this with numpy, pandas, re, datetime and more — 
 ```
 src/engine/    simulated runtime (tokenizer, parser, evaluator, memory, session)
                + goal checks (checks.ts) — the "TreeCompare" analogue
-src/levels/    7-series / 27-level catalog + per-level goals, par, solutions
+src/levels/    8-series / 31-level catalog + per-level goals, par, solutions
 src/ui/        app shell, memory canvas, plot board, REPL, dialog, script editor
 src/style.css  design tokens + layout
 tests/         vitest unit + level-solution tests
@@ -88,7 +89,7 @@ The engine is intentionally a **teaching subset**, not CPython. Every state tran
 
 ## Levels
 
-Seven series — Names & Bindings, Aliasing & Copy, Containers in Memory, **Copy Semantics** (shallow vs deep), Mutation & Methods, Functions & Frames, Plotting & Capstone. Each of the 27 levels has a brief, optional hint, a goal (predicate or target snapshot), a statement-par for golf, and a worked solution.
+Eight series — Names & Bindings, Aliasing & Copy, Containers in Memory, **Copy Semantics** (shallow vs deep), **Iterators & Iterables**, Mutation & Methods, Functions & Frames, Plotting & Capstone. Each of the 31 levels has a brief, optional hint, a goal (predicate or target snapshot), a statement-par for golf, and a worked solution.
 
 ## Tech
 

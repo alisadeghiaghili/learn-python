@@ -26,6 +26,7 @@ Supported subset (deliberately small, pedagogically sharp):
 - Function `def` / call / `return`, local frames, nested calls
 - `print`, `type`, `id`, `len`, `is`, `==`, arithmetic, comparisons
 - `import copy as cp` (simulated module) → `cp.copy` (shallow) / `cp.deepcopy`
+- `iter(x)` / `next(it)` → stateful iterator object (source reference + cursor)
 - Plotting: `scatter(xs, ys, "title")` / `line(xs, ys, "title")` → SVG board
 - Meta: `help`, `levels`, `level`, `goal`, `hint`, `solution`, `undo`, `reset`, `golf`, `script`
 
@@ -42,7 +43,7 @@ simulated module whose data structures are first-class heap objects on this canv
 ```
 src/engine/    simulated Python runtime (tokenizer, parser, evaluator, memory,
                session) + goal checks (checks.ts) — the TreeCompare analogue
-src/levels/    7-series / 27-level catalog + per-level goals, par, solutions
+src/levels/    8-series / 31-level catalog + per-level goals, par, solutions
 src/ui/        app shell, memory canvas, plot board, REPL, dialog, script editor
 src/style.css  design tokens + layout
 index.html     app shell entry
