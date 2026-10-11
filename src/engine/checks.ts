@@ -225,6 +225,14 @@ export const preds = {
     };
   },
 
+  /** `name` is a defaultdict (not a plain dict). */
+  isDefaultDict(name: string) {
+    return (snapshot: Snapshot): boolean => {
+      const view = slotView(name, snapshot);
+      return view?.type === 'defaultdict';
+    };
+  },
+
   /**
    * A plot has been drawn (optionally of a specific kind).
    */

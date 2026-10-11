@@ -306,3 +306,61 @@ describe('iterators (Phase 0b)', () => {
     expect(state.heap[state.frames[0].locals.a as string].repr).toBe('[1, 2]');
   });
 });
+
+describe('defaultdict + functional (Phase 0c/0d)', () => {
+  test('defaultdict(int) auto-defaults missing keys to 0', () => {
+    const state = runFresh("import collections as c\nd = c.defaultdict(int)\nk = d['missing']");
+    const d = state.frames[0].locals.d as string;
+    expect(state.frames[0].locals.k).toBe(0);
+    expect(state.heap[d].type).toBe('defaultdict');
+    expect(state.heap[d].repr).toBe("{'missing': 0}");
+  });
+
+  test('defaultdict(list) auto-defaults to a fresh empty list', () => {
+    const state = runFresh("import collections as c\nd = c.defaultdict(list)\nxs = d['nums']");
+    const xs = state.frames[0].locals.xs as string;
+    expect(state.heap[xs].type).toBe('list');
+    expect(state.heap[xs].repr).toBe('[]');
+  });
+
+  test('setitem on defaultdict stores the given value', () => {
+    const state = runFresh("import collections as c\nd = c.defaultdict(int)\nd['a'] = 5\nx = d['a']");
+    expect(state.frames[0].locals.x).toBe(5);
+    expect(state.heap[state.frames[0].locals.d as string].repr).toBe("{'a': 5}");
+  });
+
+  test('map applies a builtin over an iterator lazily', () => {
+    const state = runFresh("xs = ['1', '2']\nms = map(int, xs)\na = next(ms)");
+    const ms = state.frames[0].locals.ms as string;
+    expect(state.heap[ms].type).toBe('mapiter');
+    expect(state.frames[0].locals.a).toBe(1);
+  });
+
+  test('filter keeps only truthy elements', () => {
+    const state = runFresh('xs = [0, 1, 2, 3]\nfs = filter(bool, xs)\na = next(fs)');
+    const fs = state.frames[0].locals.fs as string;
+    expect(state.heap[fs].type).toBe('filteriter');
+    expect(state.frames[0].locals.a).toBe(1);
+  });
+
+  test('reduce folds a two-arg function over the sequence', () => {
+    const state = runFresh(
+      'def add(a, b):\n    return a + b\nimport functools as f\nr = f.reduce(add, [1, 2, 3, 4])',
+    );
+    expect(state.frames[0].locals.r).toBe(10);
+  });
+
+  test('map chain keeps the function and source visible', () => {
+    const state = runFresh('xs = [1, 2]\nms = map(int, xs)');
+    const v = state.heap[state.frames[0].locals.ms as string].value as { source: string; fn: string };
+    expect(state.heap[v.source]?.type).toBe('listiter');
+    expect(state.heap[v.fn]?.type).toBe('builtin');
+  });
+
+  test('isDefaultDict predicate', () => {
+    const state = runFresh('import collections as c\nd = c.defaultdict(int)');
+    expect(preds.isDefaultDict('d')(snapshot(state))).toBe(true);
+    const plain = runFresh("d = {'a': 1}");
+    expect(preds.isDefaultDict('d')(snapshot(plain))).toBe(false);
+  });
+});

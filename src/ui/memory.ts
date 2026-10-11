@@ -3,7 +3,7 @@
  */
 
 import type { GoalPreview, MemoryState, RtValue } from '../engine/types';
-import { isIteratorValue, type RefEdge } from '../engine/memory';
+import { isDefaultDictValue, isIteratorValue, isMapFilterValue, type RefEdge } from '../engine/memory';
 
 const COLORS = {
   bg: 'transparent',
@@ -127,9 +127,12 @@ function containerRefs(obj: { type: string; value: unknown }): string[] {
   if (type === 'list' || type === 'tuple' || type === 'set') {
     return (value as RtValue[]).filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
-  if (type === 'dict') {
-    return (value as Array<[string, RtValue]>).flatMap(([, v]) => (typeof v === 'string' && v.startsWith('obj_') ? [v] : []));
+  if (type === 'dict' || type === 'defaultdict') {
+    const entries = type === 'defaultdict' ? (value as { entries: Array<[string, RtValue]> }).entries : (value as Array<[string, RtValue]>);
+    return entries.flatMap(([, v]) => (typeof v === 'string' && v.startsWith('obj_') ? [v] : []));
   }
+  // map/filter → the source iterator it draws from AND the function it applies
+  if (isMapFilterValue(value)) return [value.source, value.fn];
   // iterator → the iterable it walks
   if (isIteratorValue(value)) return [value.source];
   return [];
@@ -142,6 +145,10 @@ function objectHeight(obj: { type: string; value: unknown }): number {
   }
   if (type === 'dict') {
     return 36 + Math.max((value as unknown[]).length, 1) * OBJ_ROW_H;
+  }
+  if (type === 'defaultdict') {
+    const entries = isDefaultDictValue(value) ? value.entries : [];
+    return 36 + Math.max(entries.length, 1) * OBJ_ROW_H;
   }
   return 44;
 }
@@ -205,11 +212,20 @@ function drawObject(svg: SVGSVGElement, x: number, y: number, w: number, h: numb
       const label = cellLabel(v, obj, i);
       addText(g, x + 14, y + 42 + i * OBJ_ROW_H, label, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
     });
-  } else if (obj.type === 'dict') {
-    (obj.value as Array<[string, RtValue]>).forEach(([k, v], i) => {
+  } else if (obj.type === 'dict' || obj.type === 'defaultdict') {
+    const entries = obj.type === 'defaultdict'
+      ? (isDefaultDictValue(obj.value) ? obj.value.entries : [])
+      : (obj.value as Array<[string, RtValue]>);
+    if (obj.type === 'defaultdict' && isDefaultDictValue(obj.value)) {
+      addText(g, x + 14, y + 32, `⚙ default: ${obj.value.factory}()`, COLORS.amber, 11, 'start', 'middle', 'IBM Plex Mono, monospace');
+    }
+    entries.forEach(([k, v], i) => {
       const label = `${k}: ${cellLabel(v, obj, i)}`;
       addText(g, x + 14, y + 42 + i * OBJ_ROW_H, label, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
     });
+  } else if (isMapFilterValue(obj.value)) {
+    // map/filter: show the function it applies and the source iterator it draws from
+    addText(g, x + 14, y + 32, `${obj.type === 'filteriter' ? '⚲' : 'ƒ'} ${obj.value.fn} · src ${obj.value.source}`, COLORS.ink, 11, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else if (isIteratorValue(obj.value)) {
     // iterator: show its target and current cursor
     addText(g, x + 14, y + 32, `→ ${obj.value.source} · i=${obj.value.index}`, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
