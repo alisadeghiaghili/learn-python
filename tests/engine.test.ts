@@ -268,4 +268,41 @@ describe('iterators (Phase 0b)', () => {
     expect(preds.exhausted('it')(snapshot(done), done)).toBe(true);
     expect(preds.exhausted('it')(snapshot(state), state)).toBe(false);
   });
+
+  test('iter() works over tuples too', () => {
+    const state = runFresh('it = iter((7, 8, 9))\na = next(it)');
+    expect(state.frames[0].locals.a).toBe(7);
+  });
+
+  test('iter() of a non-iterable raises TypeError', () => {
+    expect(() => runFresh('x = 5\nit = iter(x)')).toThrow(/not iterable/);
+  });
+
+  test('iter() of a string literal raises (strings are not heap objects here)', () => {
+    expect(() => runFresh('it = iter("ab")')).toThrow(/not iterable/);
+  });
+
+  test('next() of a non-iterator raises TypeError', () => {
+    expect(() => runFresh('x = [1]\nnext(x)')).toThrow(/not an iterator/);
+  });
+
+  test('deep copy does NOT clone a nested iterator (it is shared, not a container)', () => {
+    const state = runFresh('import copy as cp\nxs = [1, 2]\nit = iter(xs)\ndata = [[1], it]\ncp2 = cp.deepcopy(data)');
+    const data = state.frames[0].locals.data as string;
+    const cp2 = state.frames[0].locals.cp2 as string;
+    const itv = state.frames[0].locals.it as string;
+    // the inner [1] is a fresh container...
+    expect((state.heap[data].value as string[])[0]).not.toBe((state.heap[cp2].value as string[])[0]);
+    // ...but the iterator element is the SAME object (deepcopy treats it as a leaf)
+    expect((state.heap[data].value as string[])[1]).toBe(itv);
+    expect((state.heap[cp2].value as string[])[1]).toBe(itv);
+  });
+
+  test('an unreachable iterator is garbage-collected', () => {
+    const state = runFresh('a = [1, 2]\nit = iter(a)\nit = [9]'); // old iterator now unreachable
+    const live = liveObjectIds(state);
+    expect(live.some((id) => state.heap[id]?.type === 'listiter')).toBe(false);
+    // the list `a` is still alive via its own name
+    expect(state.heap[state.frames[0].locals.a as string].repr).toBe('[1, 2]');
+  });
 });
