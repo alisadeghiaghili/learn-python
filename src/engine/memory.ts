@@ -25,6 +25,17 @@ export function resetObjectIds(): void {
 }
 
 /**
+ * True if `value` is an iterator's `{ source, index }` payload. Guards on BOTH
+ * fields (not just the `source` key) so unrelated objects that happen to carry
+ * a `source` string are never mistaken for an iterator.
+ */
+export function isIteratorValue(value: unknown): value is { source: string; index: number } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { source?: unknown; index?: unknown };
+  return typeof v.source === 'string' && v.source.startsWith('obj_') && typeof v.index === 'number';
+}
+
+/**
  * Allocate a heap object and return its handle.
  */
 export function allocObject(type: string, value: unknown, repr: string): HeapObject {
@@ -96,10 +107,7 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
   }
   // An iterator holds a reference to the iterable it walks — keep that source
   // alive and let the canvas draw the iterator → source edge.
-  if (typeof value === 'object' && value !== null && 'source' in value) {
-    const s = (value as { source: unknown }).source;
-    return typeof s === 'string' && s.startsWith('obj_') ? [s] : [];
-  }
+  if (isIteratorValue(value)) return [value.source];
   return [];
 }
 
@@ -157,11 +165,8 @@ function normalizeValue(
   }
   // An iterator's value is an object holding a `source` id — remap it so the
   // normalized snapshot can compare it against other objects.
-  if (typeof value === 'object' && value !== null && 'source' in value) {
-    const s = (value as { source: unknown }).source;
-    if (typeof s === 'string' && heap[s]) {
-      return { ...(value as object), source: idMap[s] };
-    }
+  if (isIteratorValue(value) && heap[value.source]) {
+    return { ...(value as object), source: idMap[value.source] };
   }
   return value;
 }
