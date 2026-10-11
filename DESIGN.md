@@ -26,11 +26,15 @@ Supported subset (deliberately small, pedagogically sharp):
 - Function `def` / call / `return`, local frames, nested calls
 - `print`, `type`, `id`, `len`, `is`, `==`, arithmetic, comparisons
 - `import copy as cp` (simulated module) → `cp.copy` (shallow) / `cp.deepcopy`
+- `import collections as c` → `c.defaultdict(factory)` → dict box with a default-factory
+- `import functools as f` → `f.reduce(fn, it)` → eager fold
 - `iter(x)` / `next(it)` → stateful iterator object (source reference + cursor)
+- `map(fn, it)` / `filter(pred, it)` → lazy iterator object (source + function reference)
 - Plotting: `scatter(xs, ys, "title")` / `line(xs, ys, "title")` → SVG board
 - Meta: `help`, `levels`, `level`, `goal`, `hint`, `solution`, `undo`, `reset`, `golf`, `script`
 
-Out of scope v0: classes/OOP, real imports (only the simulated `copy` module), control flow
+Out of scope v0: classes/OOP, real imports (only the simulated `copy`, `collections`, `functools`
+modules), control flow
 (`if`/`for`/`while`), exceptions (except parse/runtime errors shown cleanly), comprehensions beyond
 simple cases, I/O, async, `range`/`sorted`/`min`/`max`/`abs`.
 
@@ -43,7 +47,7 @@ simulated module whose data structures are first-class heap objects on this canv
 ```
 src/engine/    simulated Python runtime (tokenizer, parser, evaluator, memory,
                session) + goal checks (checks.ts) — the TreeCompare analogue
-src/levels/    8-series / 31-level catalog + per-level goals, par, solutions
+src/levels/    9-series / 35-level catalog + per-level goals, par, solutions
 src/ui/        app shell, memory canvas, plot board, REPL, dialog, script editor
 src/style.css  design tokens + layout
 index.html     app shell entry
