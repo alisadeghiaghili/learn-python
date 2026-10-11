@@ -593,8 +593,10 @@ interface IteratorValue {
   index: number;
 }
 
+// Containers the subset can walk. (Strings are raw values in this engine, not
+// heap objects, so they are not iterable — a pre-existing model limitation.)
 function isIterableType(type: string): boolean {
-  return type === 'list' || type === 'tuple' || type === 'set' || type === 'str';
+  return type === 'list' || type === 'tuple' || type === 'set';
 }
 
 function isIteratorType(type: string): boolean {
