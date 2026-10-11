@@ -44,7 +44,7 @@ export function run(source: string, state: MemoryState): MemoryState {
  */
 function refreshReprs(state: MemoryState): void {
   for (const obj of Object.values(state.heap)) {
-    if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set') {
+    if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set' || obj.type === 'defaultdict') {
       obj.repr = formatObject(obj, state);
     }
   }
@@ -134,6 +134,13 @@ function lookupName(name: string, state: MemoryState, line: number): RtValue {
       return state.frames[i].locals[name];
     }
   }
+  // A bare reference to a constructor (e.g. `defaultdict(int)`, `map(int, xs)`)
+  // resolves to a `builtin` object so it can be stored on a map/defaultdict.
+  if (BUILTIN_CONSTRUCTORS.has(name)) {
+    const b = allocObject('builtin', name, name);
+    state.heap[b.id] = b;
+    return b.id;
+  }
   throw new Error(`NameError: name '${name}' is not defined (line ${line})`);
 }
 
@@ -155,9 +162,9 @@ function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
       obj.repr = formatObject(obj, state);
       return;
     }
-    if (obj.type === 'dict') {
+    if (obj.type === 'dict' || obj.type === 'defaultdict') {
       const keyRepr = dictKeyRepr(index, state);
-      const entries = obj.value as Array<[string, RtValue]>;
+      const entries = dictEntries(obj);
       const existing = entries.find(([k]) => k === keyRepr);
       if (existing) existing[1] = value;
       else entries.push([keyRepr, value]);
@@ -309,6 +316,15 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
     if (name === 'next') {
       return nextIterator(args[0], state, node.line);
     }
+    if (name === 'map') {
+      return makeMapFilter(args, state, node.line, false);
+    }
+    if (name === 'filter') {
+      return makeMapFilter(args, state, node.line, true);
+    }
+    if (name === 'reduce') {
+      return reduce(args, state, node.line);
+    }
     if (name === 'list') {
       const obj = allocObject('list', Array.isArray(args[0]) ? [...(args[0] as unknown as RtValue[])] : [], '');
       state.heap[obj.id] = obj;
@@ -410,6 +426,16 @@ function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, li
 function callMethod(objId: RtValue, method: string, args: RtValue[], state: MemoryState, line: number): RtValue {
   const obj = state.heap[objId as string];
   if (!obj) throw new Error(`TypeError: bad method target (line ${line})`);
+
+  if (obj.type === 'module' && (obj.value as { name: string }).name === 'collections') {
+    if (method === 'defaultdict') return makeDefaultdict(args, state, line);
+    throw new Error(`AttributeError: module 'collections' has no attribute '${method}' (line ${line})`);
+  }
+
+  if (obj.type === 'module' && (obj.value as { name: string }).name === 'functools') {
+    if (method === 'reduce') return reduce(args, state, line);
+    throw new Error(`AttributeError: module 'functools' has no attribute '${method}' (line ${line})`);
+  }
 
   if (obj.type === 'module' && (obj.value as { name: string }).name === 'copy') {
     if (args.length !== 1) throw new Error(`TypeError: copy() takes exactly one argument (line ${line})`);
@@ -623,6 +649,10 @@ function nextIterator(v: RtValue, state: MemoryState, line: number): RtValue {
     throw new Error(`TypeError: argument of type '${typeName(v, state)}' is not an iterator (line ${line})`);
   }
   const obj = state.heap[v];
+  // map/filter iterators delegate to their source and apply the function.
+  if (isMapFilterValue(obj.value)) {
+    return stepMapFilter(v, state, line);
+  }
   const itv = obj.value as IteratorValue;
   const src = state.heap[itv.source];
   if (!src) throw new Error(`RuntimeError: iterator source was released (line ${line})`);
@@ -635,6 +665,188 @@ function nextIterator(v: RtValue, state: MemoryState, line: number): RtValue {
     : (src.value as RtValue[])[itv.index]!;
   itv.index += 1;
   return elem;
+}
+
+/**
+ * Names that can be referenced as *values* (e.g. passed to `defaultdict`).
+ * A bare occurrence allocates a `builtin` object; a call uses the real builtin.
+ */
+const BUILTIN_CONSTRUCTORS = new Set(['list', 'dict', 'int', 'float', 'str', 'tuple', 'set', 'bool', 'len', 'range', 'sorted', 'min', 'max', 'abs', 'sum']);
+
+/**
+ * A defaultdict's stored value: the default factory name plus its entry map.
+ * Kept parallel to a plain `dict` (entries array) so the shared dict code
+ * paths in bindTarget / subscriptGet / formatObject work unchanged.
+ */
+interface DefaultDictValue {
+  factory: string;
+  entries: Array<[string, RtValue]>;
+}
+
+/** `defaultdict(factory)` → a dict-like box carrying a factory (bare value). */
+function makeDefaultdict(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length !== 1) throw new Error(`TypeError: defaultdict() takes one argument (the default factory) (line ${line})`);
+  const factory = bareBuiltinName(args[0], state, line);
+  const obj = allocObject('defaultdict', { factory, entries: [] } as DefaultDictValue, '');
+  state.heap[obj.id] = obj;
+  obj.repr = formatObject(obj, state);
+  return obj.id;
+}
+
+/** Read the entry map from a plain `dict` or a `defaultdict`. */
+function dictEntries(obj: HeapObject): Array<[string, RtValue]> {
+  if (obj.type === 'defaultdict') return (obj.value as DefaultDictValue).entries;
+  return obj.value as Array<[string, RtValue]>;
+}
+
+/**
+ * Resolve a bare builtin argument to its canonical name. Accepts a `builtin`
+ * object (from a bare value) or an ordinary name; errors otherwise.
+ */
+function bareBuiltinName(v: RtValue, state: MemoryState, line: number): string {
+  if (typeof v === 'string' && state.heap[v]) {
+    const o = state.heap[v];
+    if (o.type === 'builtin') return o.value as string;
+    throw new Error(`TypeError: expected a bare builtin, got a ${o.type} (line ${line})`);
+  }
+  throw new Error(`TypeError: expected a bare builtin (e.g. list or int), not ${typeName(v, state)} (line ${line})`);
+}
+
+/**
+ * Produce the value a defaultdict factory yields for a fresh key.
+ */
+function applyFactory(factory: string, state: MemoryState, line: number): RtValue {
+  if (factory === 'list') {
+    const o = allocObject('list', [], '');
+    state.heap[o.id] = o;
+    o.repr = formatObject(o, state);
+    return o.id;
+  }
+  if (factory === 'dict') {
+    const o = allocObject('dict', [], '');
+    state.heap[o.id] = o;
+    o.repr = formatObject(o, state);
+    return o.id;
+  }
+  if (factory === 'int' || factory === 'float') return 0;
+  if (factory === 'bool') return false;
+  if (factory === 'str') {
+    const s = allocString('', state);
+    return s;
+  }
+  throw new Error(`TypeError: default factory '${factory}' is not supported (line ${line})`);
+}
+
+/**
+ * A map/filter iterator value: a reference to a source iterator plus the
+ * function it applies (a `builtin` or user-function object id).
+ */
+interface MapFilterValue {
+  source: string;
+  fn: string;
+  isFilter: boolean;
+}
+
+function isMapFilterValue(value: unknown): value is MapFilterValue {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { source?: unknown; fn?: unknown; isFilter?: unknown };
+  return typeof v.source === 'string' && v.source.startsWith('obj_')
+    && typeof v.fn === 'string' && v.fn.startsWith('obj_')
+    && typeof v.isFilter === 'boolean';
+}
+
+/** `map(fn, it)` / `filter(pred, it)` → a lazy iterator over `it`. */
+function makeMapFilter(args: RtValue[], state: MemoryState, line: number, isFilter: boolean): RtValue {
+  if (args.length !== 2) throw new Error(`TypeError: ${isFilter ? 'filter' : 'map'}() takes exactly two arguments (line ${line})`);
+  const fn = resolveCallableName(args[0], state, line);
+  const src = ensureIterator(args[1], state, line);
+  const obj = allocObject(isFilter ? 'filteriter' : 'mapiter', { source: src, fn, isFilter } as MapFilterValue, `<${isFilter ? 'filter' : 'map'} object>`);
+  state.heap[obj.id] = obj;
+  return obj.id;
+}
+
+/** Resolve the function argument to an object id (builtin object or user fn). */
+function resolveCallableName(v: RtValue, state: MemoryState, line: number): string {
+  if (typeof v === 'string' && state.heap[v]) {
+    const o = state.heap[v];
+    if (o.type === 'builtin' || o.type === 'function') return v;
+  }
+  throw new Error(`TypeError: first argument must be a function (line ${line})`);
+}
+
+/** Ensure an argument is an iterator object (auto-wrap iterables with iter()). */
+function ensureIterator(v: RtValue, state: MemoryState, line: number): string {
+  if (typeof v === 'string' && state.heap[v]) {
+    const t = state.heap[v].type;
+    if (isIteratorType(t)) return v;
+    if (isIterableType(t)) return makeIterator(v, state, line) as string;
+  }
+  throw new Error(`TypeError: argument of type '${typeName(v, state)}' is not iterable (line ${line})`);
+}
+
+/**
+ * A single `next` step for a map/filter iterator: pull from the source,
+ * (for filter) discard falsy elements, and (for map) apply the function.
+ */
+function stepMapFilter(objId: string, state: MemoryState, line: number): RtValue {
+  const obj = state.heap[objId];
+  const mf = obj.value as MapFilterValue;
+  for (;;) {
+    if (state.heap[mf.source] && isIteratorType(state.heap[mf.source].type)) {
+      const elem = nextIterator(mf.source, state, line);
+      if (!mf.isFilter || truthy(elem, state)) {
+        return mf.isFilter ? elem : applyBuiltinCall(mf.fn, [elem], state, line);
+      }
+    } else {
+      throw new Error(`StopIteration (line ${line})`);
+    }
+  }
+}
+
+/** Call a `builtin` object (or user function) with the given args. */
+function applyBuiltinCall(fnId: string, args: RtValue[], state: MemoryState, line: number): RtValue {
+  const fn = state.heap[fnId];
+  if (!fn) throw new Error(`RuntimeError: function reference was released (line ${line})`);
+  if (fn.type === 'function') return callUserFunction(fnId, args, state, line);
+  if (fn.type === 'builtin') {
+    const b = fn.value as string;
+    const a = args[0];
+    if (b === 'int') return Math.trunc(derefNumber(a, state));
+    if (b === 'float') return Number(a);
+    if (b === 'str') return displayValue(a, state);
+    if (b === 'bool') return truthy(a, state);
+    if (b === 'list' || b === 'tuple' || b === 'set') {
+      const o = allocObject(b, Array.isArray(a) ? [...(a as unknown as RtValue[])] : [a], '');
+      state.heap[o.id] = o;
+      o.repr = formatObject(o, state);
+      return o.id;
+    }
+    if (b === 'len') return lengthOf(a, state);
+    if (b === 'abs') return Math.abs(derefNumber(a, state));
+    throw new Error(`TypeError: builtin '${b}' is not supported here (line ${line})`);
+  }
+  throw new Error(`TypeError: object of type '${fn.type}' is not callable (line ${line})`);
+}
+
+/**
+ * `reduce(fn, iterable)` → eager fold. The first element seeds the accumulator;
+ * each following element is passed as (acc, elem) to fn.
+ */
+function reduce(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length !== 2) throw new Error(`TypeError: reduce() takes exactly two arguments (line ${line})`);
+  const fn = resolveCallableName(args[0], state, line);
+  const it = ensureIterator(args[1], state, line);
+  let acc: RtValue | undefined;
+  for (;;) {
+    let elem: RtValue;
+    try {
+      elem = nextIterator(it, state, line);
+    } catch (e) {
+      if (acc === undefined) throw new Error(`TypeError: reduce() of empty iterable with no initial value (line ${line})`);
+      return acc;
+    }
+    acc = acc === undefined ? elem : applyBuiltinCall(fn, [acc, elem], state, line);
+  }
 }
 
 /**
@@ -689,7 +901,7 @@ function truthy(v: RtValue, state: MemoryState): boolean {
   if (typeof v === 'string' && state.heap[v]) {
     const obj = state.heap[v];
     if (obj.type === 'list' || obj.type === 'tuple' || obj.type === 'set') return (obj.value as RtValue[]).length > 0;
-    if (obj.type === 'dict') return (obj.value as Array<[string, RtValue]>).length > 0;
+    if (obj.type === 'dict' || obj.type === 'defaultdict') return dictEntries(obj).length > 0;
     if (obj.type === 'str') return (obj.value as string).length > 0;
   }
   return Boolean(v);
@@ -704,6 +916,7 @@ function lengthOf(v: RtValue, state: MemoryState): number {
   if (typeof v === 'string' && state.heap[v]) {
     const obj = state.heap[v];
     if (['list', 'tuple', 'set', 'dict'].includes(obj.type)) return (obj.value as unknown[]).length;
+    if (obj.type === 'defaultdict') return dictEntries(obj).length;
     if (obj.type === 'str') return (obj.value as string).length;
   }
   if (typeof v === 'string') return v.length;
@@ -836,11 +1049,18 @@ function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: 
     }
     return value[idx];
   }
-  if (obj.type === 'dict') {
+  if (obj.type === 'dict' || obj.type === 'defaultdict') {
     const keyRepr = dictKeyRepr(index, state);
-    const found = (obj.value as Array<[string, RtValue]>).find(([k]) => k === keyRepr);
-    if (!found) throw new Error(`KeyError: ${keyRepr} (line ${line})`);
-    return found[1];
+    const entries = dictEntries(obj);
+    const found = entries.find(([k]) => k === keyRepr);
+    if (found) return found[1];
+    if (obj.type === 'dict') throw new Error(`KeyError: ${keyRepr} (line ${line})`);
+    // defaultdict auto-creates the factory value and stores it on read.
+    const factory = (obj.value as DefaultDictValue).factory;
+    const created = applyFactory(factory, state, line);
+    entries.push([keyRepr, created]);
+    obj.repr = formatObject(obj, state);
+    return created;
   }
   if (obj.type === 'str') {
     const i = Number(index);
@@ -886,8 +1106,8 @@ function formatObject(obj: HeapObject, state: MemoryState): string {
   if (obj.type === 'set') {
     return '{' + (obj.value as RtValue[]).map((e) => displayValue(e, state)).join(', ') + '}';
   }
-  if (obj.type === 'dict') {
-    return '{' + (obj.value as Array<[string, RtValue]>).map(([k, v]) => `${k}: ${displayValue(v, state)}`).join(', ') + '}';
+  if (obj.type === 'dict' || obj.type === 'defaultdict') {
+    return '{' + dictEntries(obj).map(([k, v]) => `${k}: ${displayValue(v, state)}`).join(', ') + '}';
   }
   if (obj.type === 'str') return formatStr(obj.value as string);
   return String(obj.repr ?? obj.value);
@@ -900,7 +1120,7 @@ function formatObject(obj: HeapObject, state: MemoryState): string {
  * use their stored repr.
  */
 export function liveRepr(obj: HeapObject, state: MemoryState): string {
-  if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set') {
+  if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set' || obj.type === 'defaultdict') {
     return formatObject(obj, state);
   }
   return obj.repr;

@@ -36,6 +36,29 @@ export function isIteratorValue(value: unknown): value is { source: string; inde
 }
 
 /**
+ * A map/filter iterator's payload: `{ source, fn, isFilter }`. Distinct from a
+ * plain iterator (`{ source, index }`) — it carries a function object id rather
+ * than a numeric cursor.
+ */
+export function isMapFilterValue(value: unknown): value is { source: string; fn: string; isFilter: boolean } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { source?: unknown; fn?: unknown; isFilter?: unknown };
+  return typeof v.source === 'string' && v.source.startsWith('obj_')
+    && typeof v.fn === 'string' && v.fn.startsWith('obj_')
+    && typeof v.isFilter === 'boolean';
+}
+
+/**
+ * A defaultdict's payload: `{ factory, entries }`. Mirrors a plain dict's entry
+ * array plus the default-factory name.
+ */
+export function isDefaultDictValue(value: unknown): value is { factory: string; entries: Array<[string, RtValue]> } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { factory?: unknown; entries?: unknown };
+  return typeof v.factory === 'string' && Array.isArray(v.entries);
+}
+
+/**
  * Allocate a heap object and return its handle.
  */
 export function allocObject(type: string, value: unknown, repr: string): HeapObject {
@@ -105,6 +128,15 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
       .flatMap(([k, v]) => [k, v])
       .filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
+  if (type === 'defaultdict') {
+    const dd = value as { entries: Array<[string, RtValue]> };
+    return dd.entries
+      .flatMap(([k, v]) => [k, v])
+      .filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
+  }
+  // A map/filter iterator holds a ref to the source iterator AND the function
+  // it applies — keep both alive and let the canvas draw both edges.
+  if (isMapFilterValue(value)) return [value.source, value.fn];
   // An iterator holds a reference to the iterable it walks — keep that source
   // alive and let the canvas draw the iterator → source edge.
   if (isIteratorValue(value)) return [value.source];
@@ -167,6 +199,20 @@ function normalizeValue(
   // normalized snapshot can compare it against other objects.
   if (isIteratorValue(value) && heap[value.source]) {
     return { ...(value as object), source: idMap[value.source] };
+  }
+  // A map/filter iterator carries a `source` iterator and a `fn` object — remap
+  // both so structural compare can match them across runs.
+  if (isMapFilterValue(value)) {
+    return {
+      ...(value as object),
+      source: heap[value.source] ? idMap[value.source] : value.source,
+      fn: heap[value.fn] ? idMap[value.fn] : value.fn,
+    };
+  }
+  // A defaultdict's value is `{ factory, entries }` — normalize its entry map.
+  if (isDefaultDictValue(value)) {
+    const entries = value.entries.map(([k, v]) => [k, normalizeValue(v, idMap, heap, firstPass)] as [string, unknown]);
+    return { factory: value.factory, entries };
   }
   return value;
 }
