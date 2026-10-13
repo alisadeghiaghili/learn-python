@@ -440,3 +440,74 @@ describe('numpy (Phase 1)', () => {
     expect(preds.independentBuffer('a', 'b')(snapshot(copy), copy)).toBe(true);
   });
 });
+
+describe('pandas (Phase 2)', () => {
+  test('pd.Series builds a Series backed by a buffer', () => {
+    const state = runFresh('import pandas as pd\ns = pd.Series([1, 2, 3])');
+    const o = state.heap[state.frames[0].locals.s as string];
+    expect(o.type).toBe('series');
+    const v = o.value as { buffer: string };
+    expect(state.heap[v.buffer].type).toBe('buffer');
+  });
+
+  test('pd.DataFrame builds a DataFrame over one row-major buffer', () => {
+    const state = runFresh('import pandas as pd\ndf = pd.DataFrame({"x": [1, 2], "y": [3, 4]})');
+    const o = state.heap[state.frames[0].locals.df as string];
+    expect(o.type).toBe('dataframe');
+    const v = o.value as { buffer: string; columns: string[] };
+    expect(v.columns).toEqual(['x', 'y']);
+    // row-major: [1, 3, 2, 4]
+    expect(state.heap[v.buffer].repr).toBe('[1, 3, 2, 4]');
+  });
+
+  test("df['col'] reads a column as a Series", () => {
+    const state = runFresh('import pandas as pd\ndf = pd.DataFrame({"x": [1, 2], "y": [3, 4]})\nc = df["x"]');
+    const o = state.heap[state.frames[0].locals.c as string];
+    expect(o.type).toBe('series');
+    expect(preds.isSeries('c')(snapshot(state), state)).toBe(true);
+  });
+
+  test('df.iloc[i] reads a row; iloc slice is a live view (shared buffer)', () => {
+    const state = runFresh('import pandas as pd\ndf = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})\nv = df.iloc[1:3]');
+    const dfo = state.heap[state.frames[0].locals.df as string];
+    const vo = state.heap[state.frames[0].locals.v as string];
+    expect(vo.type).toBe('dataframe');
+    // a row-range shares the SAME buffer box as the frame (a view)
+    expect(preds.sharesFrameBuffer('df', 'v')(snapshot(state), state)).toBe(true);
+    expect(preds.independentFrameBuffer('df', 'v')(snapshot(state), state)).toBe(false);
+    expect(preds.rows('v', 2)(snapshot(state), state)).toBe(true);
+    expect(dfo).toBeTruthy();
+  });
+
+  test('a view mutation is seen through the original (shared buffer)', () => {
+    const state = runFresh('import pandas as pd\ndf = pd.DataFrame({"x": [1, 2, 3]})\nv = df.iloc[1:3]\nv.iloc[0] = [99]');
+    // the original frame row 1 changed because v is a view over the same buffer
+    const bufId = (state.heap[state.frames[0].locals.df as string].value as { buffer: string }).buffer;
+    const data = (state.heap[bufId].value as { data: number[] }).data;
+    expect(data[1]).toBe(99);
+  });
+
+  test('df.copy() mints an independent buffer', () => {
+    const state = runFresh('import pandas as pd\ndf = pd.DataFrame({"x": [1, 2], "y": [3, 4]})\nc = df.copy()');
+    expect(preds.independentFrameBuffer('df', 'c')(snapshot(state), state)).toBe(true);
+    expect(preds.sharesFrameBuffer('df', 'c')(snapshot(state), state)).toBe(false);
+  });
+
+  test('df.sum() reduces each column into a Series', () => {
+    const state = runFresh('import pandas as pd\ndf = pd.DataFrame({"x": [1, 2], "y": [3, 4]})\ns = df.sum()');
+    expect(preds.isSeries('s')(snapshot(state), state)).toBe(true);
+  });
+
+  test('pd.read_csv returns a DataFrame labeled with the source file', () => {
+    const state = runFresh('import pandas as pd\ndf = pd.read_csv("data.csv", {"x": [1, 2], "y": [3, 4]})');
+    const o = state.heap[state.frames[0].locals.df as string];
+    expect(o.type).toBe('dataframe');
+    expect(o.repr.startsWith('DataFrame (from data.csv)')).toBe(true);
+  });
+
+  test('pandas predicates: isDataFrame, rows', () => {
+    const state = runFresh('import pandas as pd\ndf = pd.DataFrame({"x": [1, 2, 3]})');
+    expect(preds.isDataFrame('df')(snapshot(state), state)).toBe(true);
+    expect(preds.rows('df', 3)(snapshot(state), state)).toBe(true);
+  });
+});

@@ -145,12 +145,16 @@ export interface SubscriptNode extends BaseNode {
   kind: 'Subscript';
   object: AstNode;
   index: AstNode | null;
+  /** The attribute selector when the target is `obj.attr[index]` (e.g. `df.loc`). */
+  attr?: string;
 }
 export interface SliceNode extends BaseNode {
   kind: 'Slice';
   object: AstNode;
   start: AstNode | null;
   stop: AstNode | null;
+  /** The attribute selector when the target is `obj.attr[a:b]` (e.g. `df.loc`). */
+  attr?: string;
 }
 export interface AttributeNode extends BaseNode {
   kind: 'Attribute';

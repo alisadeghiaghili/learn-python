@@ -274,6 +274,9 @@ class Parser {
 
   private parsePostfix(): AstNode {
     let node = this.parseAtom();
+    // Attribute the immediately-preceding `.` selector, so `obj.attr[...]`
+    // becomes a Subscript/Slice over `obj` carrying `attr` (pandas loc/iloc).
+    let pendingAttr: string | null = null;
     for (;;) {
       const tok = this.peek();
       if (!tok) break;
@@ -281,17 +284,23 @@ class Parser {
         this.next();
         const name = this.expect('NAME').value;
         node = { kind: 'Attribute', object: node, attr: name, line: tok.line };
+        pendingAttr = name;
         continue;
       }
       if (tok.type === 'OP' && tok.value === '[') {
         this.next();
+        // `obj.attr[...]` is subscripted over the BASE object with the attr as
+        // a tag (pandas loc/iloc); a plain `obj[...]` subscripts `obj` directly.
+        const attrBase = node.kind === 'Attribute' && pendingAttr !== null ? (node as { object: AstNode }).object : node;
+        const attr = node.kind === 'Attribute' && pendingAttr !== null ? pendingAttr : undefined;
+        pendingAttr = null;
         let index: AstNode | null = null;
         if (!(this.peek()?.type === 'OP' && this.peek().value === ']')) {
           if (this.peek()?.type === 'OP' && this.peek().value === ':') {
             this.next();
             const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
             this.expect('OP', ']');
-            node = { kind: 'Slice', object: node, start: null, stop, line: tok.line };
+            node = { kind: 'Slice', object: attrBase, start: null, stop, line: tok.line, attr };
             continue;
           }
           const start = this.parseExpr();
@@ -299,13 +308,13 @@ class Parser {
             this.next();
             const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
             this.expect('OP', ']');
-            node = { kind: 'Slice', object: node, start, stop, line: tok.line };
+            node = { kind: 'Slice', object: attrBase, start, stop, line: tok.line, attr };
             continue;
           }
           index = start;
         }
         this.expect('OP', ']');
-        node = { kind: 'Subscript', object: node, index, line: tok.line };
+        node = { kind: 'Subscript', object: attrBase, index, line: tok.line, attr };
         continue;
       }
       if (tok.type === 'OP' && tok.value === '(') {
