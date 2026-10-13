@@ -10,14 +10,16 @@
 import type { PlotSpec } from '../engine/types';
 import { escapeHtml } from './dialog';
 
-export type BoardTab = 'memory' | 'plot';
+export type BoardTab = 'memory' | 'plot' | 'ram';
 
 export class BoardView {
   private root: HTMLElement;
   private canvas!: SVGSVGElement;
+  private ramCanvas!: SVGSVGElement;
   private plotBody!: HTMLElement;
   private memoryTabBtn!: HTMLButtonElement;
   private plotTabBtn!: HTMLButtonElement;
+  private ramTabBtn!: HTMLButtonElement;
   private currentTab: BoardTab = 'memory';
   private plots: PlotSpec[] = [];
   private onTabChange?: (tab: BoardTab) => void;
@@ -31,6 +33,11 @@ export class BoardView {
   /** The live memory canvas (App drives it via renderMemory). */
   get canvasEl(): SVGSVGElement {
     return this.canvas;
+  }
+
+  /** The live RAM canvas (App drives it via renderRam). */
+  get ramCanvasEl(): SVGSVGElement {
+    return this.ramCanvas;
   }
 
   setTab(tab: BoardTab): void {
@@ -72,6 +79,10 @@ export class BoardView {
             <span>Plot</span>
             ${hasPlot ? '<span class="tab-badge ok">●</span>' : ''}
           </button>
+          <button type="button" class="board-tab${this.currentTab === 'ram' ? ' is-active' : ''}" data-tab="ram" role="tab" aria-selected="${this.currentTab === 'ram'}">
+            <span>RAM</span>
+            <span class="tab-badge">addr · ref</span>
+          </button>
         </div>
       </div>
       <div class="board-body">
@@ -81,16 +92,22 @@ export class BoardView {
         <div class="board-pane${this.currentTab === 'plot' ? ' is-active' : ''}" data-pane="plot">
           <div class="plot-stage" id="plot-stage"></div>
         </div>
+        <div class="board-pane${this.currentTab === 'ram' ? ' is-active' : ''}" data-pane="ram">
+          <div class="canvas-wrap"><svg id="ram-canvas" xmlns="http://www.w3.org/2000/svg"></svg></div>
+        </div>
       </div>
     `;
 
     this.canvas = this.root.querySelector('#canvas')!;
+    this.ramCanvas = this.root.querySelector('#ram-canvas')!;
     this.plotBody = this.root.querySelector('#plot-stage')!;
     this.memoryTabBtn = this.root.querySelector('[data-tab="memory"]') as HTMLButtonElement;
     this.plotTabBtn = this.root.querySelector('[data-tab="plot"]') as HTMLButtonElement;
+    this.ramTabBtn = this.root.querySelector('[data-tab="ram"]') as HTMLButtonElement;
 
     this.memoryTabBtn.addEventListener('click', () => this.setTab('memory'));
     this.plotTabBtn.addEventListener('click', () => this.setTab('plot'));
+    this.ramTabBtn.addEventListener('click', () => this.setTab('ram'));
 
     this.renderPlot();
   }
