@@ -12,6 +12,7 @@ import { series as copySemantics } from './copy-semantics';
 import { series as iterators } from './iterators';
 import { series as functional } from './functional';
 import { series as numpy } from './numpy';
+import { series as pandas } from './pandas';
 import { series as mutation } from './mutation';
 import { series as functions } from './functions';
 import { series as plotting } from './plotting';
@@ -25,6 +26,7 @@ export const sequences: Sequence[] = [
   ...iterators,
   ...functional,
   ...numpy,
+  ...pandas,
   ...mutation,
   ...functions,
   ...plotting,

@@ -54,6 +54,14 @@ function estimateByteSize(type: string, value: unknown): number {
     case 'ndarray':
       // buffer ptr + offset + shape + dtype + view flag
       return HEADER + 8 + 8 + 8 + 4 + 1;
+    case 'series': {
+      const v = value as { index?: unknown[] };
+      return HEADER + 8 + 8 + 8 + 4 + 8 * (v.index ? v.index.length : 0);
+    }
+    case 'dataframe': {
+      const v = value as { columns?: unknown[]; index?: unknown[] };
+      return HEADER + 8 + 8 * (v.columns ? v.columns.length : 0) + 8 * (v.index ? v.index.length : 0);
+    }
     case 'function':
       return HEADER + 8 + 8 + 8;
     default:
@@ -153,6 +161,20 @@ export function isNdarrayValue(value: unknown): value is { buffer: string; offse
     && typeof v.dtype === 'string' && typeof v.view === 'boolean';
 }
 
+/**
+ * A pandas Series/DataFrame payload carries a `buffer` heap id (a window over
+ * a buffer box, the numpy picture lifted to a table). Detected by its buffer
+ * ref plus a pandas marker (`length` for a Series, `columns` for a DataFrame).
+ */
+export function isPandasValue(value: unknown): value is { buffer: string } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { buffer?: unknown };
+  if (typeof v.buffer !== 'string' || !v.buffer.startsWith('obj_')) return false;
+  const hasSeries = (value as { length?: unknown }).length !== undefined;
+  const hasFrame = Array.isArray((value as { columns?: unknown }).columns);
+  return hasSeries || hasFrame;
+}
+
 export interface RefEdge {
   fromFrame: string;
   name: string;
@@ -224,6 +246,8 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
   // An ndarray holds a ref to the buffer it views — keep that buffer alive and
   // let the canvas draw the ndarray → buffer edge (the view-vs-copy picture).
   if (isNdarrayValue(value)) return [value.buffer];
+  // A pandas Series/DataFrame holds a ref to its buffer box — keep it alive.
+  if (isPandasValue(value)) return [value.buffer];
   // A map/filter iterator holds a ref to the source iterator AND the function
   // it applies — keep both alive and let the canvas draw both edges.
   if (isMapFilterValue(value)) return [value.source, value.fn];
@@ -289,6 +313,11 @@ function normalizeValue(
   // array compare as pointing at the same buffer in the normalized snapshot.
   if (isNdarrayValue(value) && heap[value.buffer]) {
     return { ...(value as object), buffer: idMap[value.buffer] };
+  }
+  // A pandas Series/DataFrame's value holds a `buffer` id — remap it the same
+  // way, so a copy (new buffer) and a view (shared buffer) compare distinctly.
+  if (isPandasValue(value) && heap[(value as { buffer: string }).buffer]) {
+    return { ...(value as object), buffer: idMap[(value as { buffer: string }).buffer] };
   }
   // An iterator's value is an object holding a `source` id — remap it so the
   // normalized snapshot can compare it against other objects.

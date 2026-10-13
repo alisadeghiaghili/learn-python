@@ -265,6 +265,58 @@ export const preds = {
     };
   },
 
+  /** `name` is a pandas Series. */
+  isSeries(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const view = slotView(name, snapshot);
+      return view?.type === 'series' ? true : `'${name}' is not a Series.`;
+    };
+  },
+
+  /** `name` is a pandas DataFrame. */
+  isDataFrame(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const view = slotView(name, snapshot);
+      return view?.type === 'dataframe' ? true : `'${name}' is not a DataFrame.`;
+    };
+  },
+
+  /** `name` (Series/DataFrame) currently shows exactly `count` rows. */
+  rows(name: string, count: number) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const module = snapshot.frames[snapshot.frames.length - 1];
+      const id = module?.locals[name];
+      if (typeof id !== 'string' || !snapshot.heap[id]) return `Bind '${name}' first.`;
+      const v = snapshot.heap[id].value as { length?: number; index?: unknown[] };
+      const n = typeof v.length === 'number' ? v.length : v.index?.length ?? 0;
+      return n === count ? true : `'${name}' has ${n} rows, expected ${count}.`;
+    };
+  },
+
+  /**
+   * Two Series/DataFrames point at the SAME buffer (a view / shared store).
+   */
+  sharesFrameBuffer(name: string, other: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const a = pandasBufferId(name, snapshot);
+      const b = pandasBufferId(other, snapshot);
+      if (a === null || b === null) return `Bind both '${name}' and '${other}' as pandas objects.`;
+      return a === b;
+    };
+  },
+
+  /**
+   * Two Series/DataFrames point at DIFFERENT buffers (an independent copy).
+   */
+  independentFrameBuffer(name: string, other: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const a = pandasBufferId(name, snapshot);
+      const b = pandasBufferId(other, snapshot);
+      if (a === null || b === null) return `Bind both '${name}' and '${other}' as pandas objects.`;
+      return a !== b;
+    };
+  },
+
   /**
    * A plot has been drawn (optionally of a specific kind).
    */
@@ -334,6 +386,18 @@ export const preds = {
     };
   },
 };
+
+/** Read a pandas Series/DataFrame's normalized `buffer` id from the snapshot. */
+function pandasBufferId(name: string, snapshot: Snapshot): string | null {
+  const module = snapshot.frames[snapshot.frames.length - 1];
+  if (!module) return null;
+  const id = module.locals[name];
+  if (typeof id !== 'string' || !snapshot.heap[id]) return null;
+  const obj = snapshot.heap[id];
+  if (obj.type !== 'series' && obj.type !== 'dataframe') return null;
+  const v = obj.value as { buffer?: unknown };
+  return typeof v.buffer === 'string' ? v.buffer : null;
+}
 
 /** Read an ndarray's normalized `buffer` id from the snapshot, or null. */
 function ndarrayBufferId(name: string, snapshot: Snapshot): string | null {
