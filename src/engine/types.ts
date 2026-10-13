@@ -18,12 +18,30 @@ export interface FunctionCode {
   body: AstNode[];
 }
 
-/** A heap object. `value` is heterogeneous by `type`. */
+/** The memory segment an object lives in (for the RAM view). */
+export type MemorySegment = 'stack' | 'heap' | 'buffer';
+
+/**
+ * A heap object. `value` is heterogeneous by `type`.
+ *
+ * The `addr` / `byteSize` / `refCount` / `seg` fields feed the **RAM view** — a
+ * simplified CPython memory layout (object header + payload, stable monotonic
+ * addresses, reference counts). They are ignored by the abstract Memory view,
+ * `snapshot()`, and goal-checking, which stay layout-free and id-based.
+ */
 export interface HeapObject {
   id: string;
   type: string;
   value: unknown;
   repr: string;
+  /** Stable byte address (monotonic, models malloc — never freed). */
+  addr: number;
+  /** Approximate in-memory size in bytes (CPython approximation). */
+  byteSize: number;
+  /** Number of live references pointing at this object (RAM/GC teaching). */
+  refCount: number;
+  /** Which memory segment it belongs to. */
+  seg: MemorySegment;
 }
 
 /* —— Memory state —— */
@@ -223,11 +241,6 @@ export type GoalSpec =
   | { type: 'stdout'; lines: string[] }
   | { type: 'plot'; kind?: PlotSpec['kind'] };
 
-export interface GoalPreview {
-  vars: Record<string, { type?: string; repr?: string }>;
-  aliased?: Array<[string, string]>;
-}
-
 export interface GoalResult {
   ok: boolean;
   message: string;
@@ -251,9 +264,19 @@ export interface Snapshot {
 
 /* —— Level catalog —— */
 
+/**
+ * The pedagogical band a level lives on. It is a first-class attribute of the
+ * curriculum: the ELI bands are woven through the levels and the lessons, not
+ * just reported. The band tracks `difficulty` (1→5 = eli5→eliphd) and the
+ * 5-ladder 0→90 (see docs/CURRICULUM.md).
+ */
+export type EliBand = 'eli5' | 'eli10' | 'eli15' | 'eli20' | 'eliphd';
+
 export interface Level {
   id: string;
   name: string;
+  /** The ELI band this level teaches on (first-class curriculum attribute). */
+  eli: EliBand;
   /** One-line objective shown in the dock. */
   brief: string;
   hint: string;
@@ -264,8 +287,6 @@ export interface Level {
   /** Difficulty 1–5, shown as a dot rating in the catalog. */
   difficulty: number;
   goal: GoalSpec;
-  /** Legacy paper-card target preview (optional; the dock uses live checks). */
-  goalPreview?: GoalPreview;
   solution: string;
   /** Full markdown lesson (EN base; i18n overlays it). */
   lesson?: string;
@@ -279,4 +300,9 @@ export interface Sequence {
   id: string;
   title: string;
   levels: Level[];
+  /**
+   * The per-topic deep lesson that ramps ELI5→ELI-PHD and carries the full
+   * professional coverage for the series. Rendered in the lesson panel.
+   */
+  deepLesson?: string;
 }

@@ -16,12 +16,93 @@ import type {
 } from './types';
 
 let nextObjectId = 1;
+let nextAddr = 0;
 
-/**
- * Reset object id counter (used by tests and full resets).
- */
+/** Reset object id counter + address allocator (used by tests and full resets). */
 export function resetObjectIds(): void {
   nextObjectId = 1;
+  nextAddr = 0;
+}
+
+/**
+ * Approximate in-memory size of a heap object, in bytes. A deliberate
+ * CPython approximation (64-bit: a 16-byte object header + payload) for the RAM
+ * view — the teaching point is *relative* size and contiguity, not exactness.
+ */
+function estimateByteSize(type: string, value: unknown): number {
+  const HEADER = 16;
+  const arrLen = (v: unknown): number => (Array.isArray(v) ? v.length : 0);
+  switch (type) {
+    case 'list':
+    case 'tuple':
+    case 'set':
+      // an array of 8-byte slot pointers
+      return HEADER + 8 * arrLen(value);
+    case 'dict':
+      return HEADER + 8 * arrLen(value);
+    case 'defaultdict': {
+      const v = value as { entries?: unknown[] };
+      return HEADER + 8 + 8 * (v.entries ? v.entries.length : 0);
+    }
+    case 'str':
+      return HEADER + 1 + (typeof value === 'string' ? value.length : 0);
+    case 'buffer': {
+      // a contiguous run of float64 (8 bytes each)
+      const v = value as { data?: unknown[] };
+      return HEADER + 8 * (v.data ? v.data.length : 0);
+    }
+    case 'ndarray':
+      // buffer ptr + offset + shape + dtype + view flag
+      return HEADER + 8 + 8 + 8 + 4 + 1;
+    case 'function':
+      return HEADER + 8 + 8 + 8;
+    default:
+      return HEADER + 8;
+  }
+}
+
+/**
+ * Allocate a heap object and return its handle. Assigns a stable monotonic
+ * address (models malloc — addresses are never reused) and an approximate byte
+ * size for the RAM view. Reference count starts at 0 and is recomputed by
+ * `computeRefCounts` after each statement.
+ */
+export function allocObject(type: string, value: unknown, repr: string): HeapObject {
+  const id = `obj_${nextObjectId++}`;
+  const byteSize = estimateByteSize(type, value);
+  const addr = nextAddr;
+  nextAddr += Math.max(byteSize, 16); // 16-byte aligned, like real malloc
+  return {
+    id,
+    type,
+    value,
+    repr,
+    addr,
+    byteSize,
+    refCount: 0,
+    seg: type === 'buffer' ? 'buffer' : 'heap',
+  };
+}
+
+/**
+ * Recompute every heap object's reference count from the live graph: inbound
+ * references from frame roots plus references from other containers. Drives the
+ * refcount column in the RAM view and the GC teaching.
+ */
+export function computeRefCounts(state: MemoryState): void {
+  const counts: Record<string, number> = {};
+  for (const id of Object.keys(state.heap)) counts[id] = 0;
+  for (const frame of state.frames) {
+    for (const targetId of Object.values(frame.locals)) {
+      if (typeof targetId === 'string' && counts[targetId] !== undefined) counts[targetId] += 1;
+    }
+  }
+  for (const obj of Object.values(state.heap)) {
+    for (const ref of nestedRefs(obj)) {
+      if (counts[ref] !== undefined) counts[ref] += 1;
+    }
+  }
+  for (const id of Object.keys(counts)) state.heap[id].refCount = counts[id];
 }
 
 /**
@@ -59,11 +140,17 @@ export function isDefaultDictValue(value: unknown): value is { factory: string; 
 }
 
 /**
- * Allocate a heap object and return its handle.
+ * An ndarray's payload: a window `{ buffer, offset, shape, dtype, view }`
+ * onto a buffer box. `buffer` is a heap id, so it must stay alive and draw an
+ * edge — the view-vs-copy picture is exactly "how many ndarrays point at one
+ * buffer box."
  */
-export function allocObject(type: string, value: unknown, repr: string): HeapObject {
-  const id = `obj_${nextObjectId++}`;
-  return { id, type, value, repr };
+export function isNdarrayValue(value: unknown): value is { buffer: string; offset: number; shape: number; dtype: string; view: boolean } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { buffer?: unknown; offset?: unknown; shape?: unknown; dtype?: unknown; view?: unknown };
+  return typeof v.buffer === 'string' && v.buffer.startsWith('obj_')
+    && typeof v.offset === 'number' && typeof v.shape === 'number'
+    && typeof v.dtype === 'string' && typeof v.view === 'boolean';
 }
 
 export interface RefEdge {
@@ -134,6 +221,9 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
       .flatMap(([k, v]) => [k, v])
       .filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
+  // An ndarray holds a ref to the buffer it views — keep that buffer alive and
+  // let the canvas draw the ndarray → buffer edge (the view-vs-copy picture).
+  if (isNdarrayValue(value)) return [value.buffer];
   // A map/filter iterator holds a ref to the source iterator AND the function
   // it applies — keep both alive and let the canvas draw both edges.
   if (isMapFilterValue(value)) return [value.source, value.fn];
@@ -194,6 +284,11 @@ function normalizeValue(
   }
   if (Array.isArray(value)) {
     return value.map((v) => normalizeValue(v, idMap, heap, firstPass));
+  }
+  // An ndarray's value holds a `buffer` id — remap it so a view and its source
+  // array compare as pointing at the same buffer in the normalized snapshot.
+  if (isNdarrayValue(value) && heap[value.buffer]) {
+    return { ...(value as object), buffer: idMap[value.buffer] };
   }
   // An iterator's value is an object holding a `source` id — remap it so the
   // normalized snapshot can compare it against other objects.
