@@ -174,6 +174,17 @@ function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
     const index = target.index ? evalExpr(target.index, state) : null;
     const obj = state.heap[objId as string];
     if (!obj) throw new Error('TypeError: cannot subscript immutable value');
+    const line = target.line;
+    // df.iloc[i] = [..] — position-based row write through the shared buffer
+    if (target.attr === 'iloc') {
+      frameIlocSet(objId as string, index as RtValue, value, state, line);
+      return;
+    }
+    // df['col'] = [..] — replace a column's values in the shared buffer
+    if (obj.type === 'dataframe') {
+      frameSetColumn(objId as string, index as RtValue, value, state, line);
+      return;
+    }
     if (obj.type === 'list') {
       (obj.value as RtValue[])[index as number] = value;
       obj.repr = formatObject(obj, state);
@@ -286,12 +297,15 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
     case 'Subscript': {
       const objId = evalExpr(node.object, state);
       const index = evalExpr(node.index!, state);
+      if (node.attr === 'loc') return frameLocRow(objId as string, index, state, node.line);
+      if (node.attr === 'iloc') return frameIlocRow(objId as string, index, state, node.line);
       return subscriptGet(objId, index, state, node.line);
     }
     case 'Slice': {
       const objId = evalExpr(node.object, state);
       const start = node.start ? evalExpr(node.start, state) : null;
       const stop = node.stop ? evalExpr(node.stop, state) : null;
+      if (node.attr === 'iloc') return frameIlocSlice(objId as string, start, stop, state, node.line);
       return sliceGet(objId, start, stop, state, node.line);
     }
     case 'Attribute':
@@ -477,10 +491,25 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
     throw new Error(`AttributeError: module 'numpy' has no attribute '${method}' (line ${line})`);
   }
 
+  if (obj.type === 'module' && (obj.value as { name: string }).name === 'pandas') {
+    if (method === 'Series') return makeSeries(args, state, line);
+    if (method === 'DataFrame') return makeDataFrame(args, state, line);
+    if (method === 'read_csv') return readCsv(args, state, line);
+    throw new Error(`AttributeError: module 'pandas' has no attribute '${method}' (line ${line})`);
+  }
+
   if (obj.type === 'ndarray') {
     if (method === 'copy') return copyNdarray(objId as string, state, line);
     if (method === 'sum') return ndarraySum(objId as string, state, line);
     throw new Error(`AttributeError: 'ndarray' object has no attribute '${method}' (line ${line})`);
+  }
+
+  if (obj.type === 'series' || obj.type === 'dataframe') {
+    // .loc / .iloc are not called — they are subscripts handled by bindTarget
+    // and evalExpr (subscriptGet). Only callable methods land here.
+    if (method === 'copy') return frameCopy(objId as string, state, line);
+    if (method === 'sum') return frameSum(objId as string, state, line);
+    throw new Error(`AttributeError: '${obj.type}' object has no attribute '${method}' (line ${line})`);
   }
 
   if (obj.type === 'list') {
@@ -1005,6 +1034,504 @@ function ndarraySum(ndId: string, state: MemoryState, line: number): RtValue {
   return ndarrayWindow(ndId, state).reduce((acc, n) => acc + n, 0);
 }
 
+/* ————————————————— pandas (Phase 2) —————————————————
+ *
+ * A Series/DataFrame is *windows over a buffer*, the numpy picture lifted to a
+ * table. `buffer` here reuses the numpy 'buffer' box (a flat run of numbers),
+ * so the RAM view shows the same byte layout and a copy is a genuinely new
+ * buffer. Two identities are taught: loc/iloc give a *live view* (shares the
+ * buffer), and .copy() gives an *independent* buffer.
+ */
+
+interface PandasBufferValue {
+  data: number[];
+  dtype: string;
+}
+
+/** A Series: a window over a buffer plus its row labels. */
+interface PandasSeriesValue {
+  buffer: string;
+  offset: number;
+  length: number;
+  dtype: string;
+  index: string[];
+  view: boolean;
+  name?: string;
+  /** The shared buffer a row/iloc view derives from (its `base`). */
+  source?: string;
+}
+
+/** A DataFrame: a window over a row-major buffer, plus labels. */
+interface PandasDataFrameValue {
+  buffer: string;
+  columns: string[];
+  index: string[];
+  dtype: string;
+  view: boolean;
+  /** First row of this window into the buffer (0 for an owning frame; a row-slice shares the buffer at an offset). */
+  rowOffset?: number;
+  source?: string;
+}
+
+/** The number of rows an object currently shows. */
+function frameRowCount(v: { length?: number; index?: string[] }): number {
+  if (typeof v.length === 'number') return v.length;
+  return v.index?.length ?? 0;
+}
+
+/**
+ * Strip a display label down to a bare name: `'x'` → `x`. Dict keys are stored
+ * as display labels (quoted for strings); pandas column names are the unquoted
+ * value, so normalize on read and on lookup.
+ */
+function colName(label: string): string {
+  if (label.startsWith("'") && label.endsWith("'") && label.length >= 2) {
+    return label.slice(1, -1).replace(/\\'/g, "'").replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
+  }
+  return label;
+}
+
+/** The numbers a Series window currently shows. */
+function seriesValues(sId: string, state: MemoryState): number[] {
+  const s = state.heap[sId].value as PandasSeriesValue;
+  const data = (state.heap[s.buffer].value as PandasBufferValue).data;
+  return data.slice(s.offset, s.offset + s.length);
+}
+
+/** First buffer row a DataFrame window starts at (0 for an owning frame). */
+function frameRowStart(v: PandasDataFrameValue): number {
+  return v.rowOffset ?? 0;
+}
+
+/** Read one column of a DataFrame window as a plain number run (row-major). */
+function frameColumn(dfId: string, col: string, state: MemoryState): number[] {
+  const v = state.heap[dfId].value as PandasDataFrameValue;
+  const data = (state.heap[v.buffer].value as PandasBufferValue).data;
+  const ci = v.columns.indexOf(col);
+  if (ci < 0) return [];
+  const rowStart = frameRowStart(v);
+  const nRows = frameRowCount(v);
+  const out: number[] = [];
+  for (let r = 0; r < nRows; r++) out.push(data[(rowStart + r) * v.columns.length + ci]!);
+  return out;
+}
+
+/** Column-major: the buffer layout for a set of rows × columns. */
+function frameBufferData(rows: Record<string, number[]>, columns: string[], nRows: number): number[] {
+  const out: number[] = [];
+  for (let r = 0; r < nRows; r++) for (const c of columns) out.push(rows[c]?.[r] ?? 0);
+  return out;
+}
+
+function makePandasBuffer(data: number[], dtype: string, state: MemoryState): string {
+  const obj = allocObject('buffer', { data, dtype } as PandasBufferValue, `[${data.join(', ')}]`);
+  state.heap[obj.id] = obj;
+  return obj.id;
+}
+
+/**
+ * Build the canonical label + header repr for a Series or DataFrame so the box
+ * and the RAM view both read like a pandas object (labels, column headers).
+ */
+function pandasRepr(type: string, v: PandasSeriesValue | PandasDataFrameValue, state: MemoryState): string {
+  if (type === 'series') {
+    const s = v as PandasSeriesValue;
+    const data = (state.heap[s.buffer].value as PandasBufferValue).data;
+    const shown = data.slice(s.offset, s.offset + s.length);
+    const labels = s.index.slice(s.offset, s.offset + s.length);
+    const lines = labels.map((label, i) => `${String(label).padEnd(8)} ${shown[i] ?? 0}`);
+    const header = s.name ? `Series: ${s.name}` : 'Series';
+    return `${header}\n${lines.join('\n')}`;
+  }
+  const f = v as PandasDataFrameValue;
+  const data = (state.heap[f.buffer].value as PandasBufferValue).data;
+  const nRows = frameRowCount(f);
+  const rowStart = frameRowStart(f);
+  const head = f.columns.join('  ');
+  const lines: string[] = [head];
+  for (let r = 0; r < nRows; r++) {
+    const cells: string[] = [];
+    for (const c of f.columns) cells.push(String(data[(rowStart + r) * f.columns.length + f.columns.indexOf(c)] ?? 0));
+    lines.push(`${f.index[r] ?? ''}  ${cells.join('  ')}`);
+  }
+  return `DataFrame\n${lines.join('\n')}`;
+}
+
+/** `pd.Series([v0, v1, ...], index=[...])` → a Series window owning its buffer. */
+function makeSeries(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length !== 1) throw new Error(`TypeError: Series() takes one argument (line ${line})`);
+  const data = readNumberSeries(args[0], state);
+  const bufId = makePandasBuffer(data, 'float64', state);
+  const v: PandasSeriesValue = {
+    buffer: bufId,
+    offset: 0,
+    length: data.length,
+    dtype: 'float64',
+    index: data.map((_, i) => String(i)),
+    view: false,
+  };
+  const obj = allocObject('series', v, '');
+  state.heap[obj.id] = obj;
+  obj.repr = pandasRepr('series', v, state);
+  return obj.id;
+}
+
+/** `pd.DataFrame({col: [...], ...})` → a DataFrame with one buffer (row-major). */
+function makeDataFrame(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length !== 1) throw new Error(`TypeError: DataFrame() takes one argument (line ${line})`);
+  const obj = state.heap[args[0] as string];
+  if (!obj || obj.type !== 'dict') throw new Error(`TypeError: DataFrame() takes a dict of columns (line ${line})`);
+  const entries = obj.value as Array<[string, RtValue]>;
+  const columns = entries.map(([k]) => colName(k));
+  const colData = entries.map(([, v]) => readNumberSeries(v, state));
+  const nRows = Math.max(0, ...colData.map((c) => c.length));
+  const rows: Record<string, number[]> = {};
+  columns.forEach((c, ci) => (rows[c] = colData[ci]!));
+  const bufId = makePandasBuffer(frameBufferData(rows, columns, nRows), 'float64', state);
+  const v: PandasDataFrameValue = {
+    buffer: bufId,
+    columns,
+    index: Array.from({ length: nRows }, (_, i) => String(i)),
+    dtype: 'float64',
+    view: false,
+  };
+  const df = allocObject('dataframe', v, '');
+  state.heap[df.id] = df;
+  df.repr = pandasRepr('dataframe', v, state);
+  return df.id;
+}
+
+/**
+ * Select one or more columns of a DataFrame. Returns a single Series for a
+ * scalar column key, a new owning DataFrame for a list of columns.
+ */
+function frameGetColumn(dfId: string, key: RtValue, state: MemoryState, line: number): RtValue {
+  const v = state.heap[dfId].value as PandasDataFrameValue;
+  const isList = typeof key === 'string' && state.heap[key] && state.heap[key].type === 'list';
+  const cols: string[] = [];
+  if (isList) {
+    for (const e of state.heap[key].value as RtValue[]) {
+      const c = colName(displayValue(e, state));
+      if (!v.columns.includes(c)) throw new Error(`KeyError: column '${c}' (line ${line})`);
+      cols.push(c);
+    }
+  } else {
+    const c = colName(displayValue(key, state));
+    if (!v.columns.includes(c)) throw new Error(`KeyError: column '${c}' (line ${line})`);
+    cols.push(c);
+  }
+
+  const nRows = frameRowCount(v);
+
+  if (cols.length === 1 && !isList) {
+    // a single named column is a Series. A column is not a contiguous run of
+    // the row-major buffer, so it gets its own single-column buffer.
+    const col = frameColumn(dfId, cols[0]!, state);
+    const s: PandasSeriesValue = {
+      buffer: makePandasBuffer(col, v.dtype, state),
+      offset: 0,
+      length: nRows,
+      dtype: v.dtype,
+      index: [...v.index],
+      view: false,
+      name: cols[0],
+    };
+    const so = allocObject('series', s, '');
+    state.heap[so.id] = so;
+    so.repr = pandasRepr('series', s, state);
+    return so.id;
+  }
+
+  // subset of columns → new owning DataFrame over a fresh buffer
+  const rows: Record<string, number[]> = {};
+  for (const c of cols) rows[c] = frameColumn(dfId, c, state);
+  const nbuf = makePandasBuffer(frameBufferData(rows, cols, nRows), v.dtype, state);
+  const nf: PandasDataFrameValue = {
+    buffer: nbuf,
+    columns: cols,
+    index: [...v.index],
+    dtype: v.dtype,
+    view: false,
+  };
+  const nd = allocObject('dataframe', nf, '');
+  state.heap[nd.id] = nd;
+  nd.repr = pandasRepr('dataframe', nf, state);
+  return nd.id;
+}
+
+/** `df.loc[rowIndex]` / `s.loc[rowIndex]` → a live row view (shares buffer). */
+function frameLocRow(objId: string, key: RtValue, state: MemoryState, line: number): RtValue {
+  const obj = state.heap[objId];
+  if (!obj) throw new Error(`TypeError: bad loc target (line ${line})`);
+  const label = displayValue(key, state);
+
+  if (obj.type === 'series') {
+    const s = obj.value as PandasSeriesValue;
+    const i = s.index.indexOf(label);
+    if (i < 0) throw new Error(`KeyError: ${label} (line ${line})`);
+    // a row of a Series is a scalar
+    return seriesValues(objId, state)[i]!;
+  }
+
+  if (obj.type === 'dataframe') {
+    const f = obj.value as PandasDataFrameValue;
+    const i = f.index.indexOf(label);
+    if (i < 0) throw new Error(`KeyError: ${label} (line ${line})`);
+    // a row of a DataFrame is a Series view over the shared buffer
+    const row: number[] = [];
+    for (const c of f.columns) row.push(frameColumn(objId, c, state)[i]!);
+    const s: PandasSeriesValue = {
+      buffer: state.heap[f.buffer].id,
+      offset: 0,
+      length: f.columns.length,
+      dtype: f.dtype,
+      index: [...f.columns],
+      view: true,
+    };
+    // materialize the row into its own single-row buffer so the RAM view shows
+    // a live window over the shared (row-major) store.
+    const rbuf = makePandasBuffer(row, f.dtype, state);
+    s.buffer = rbuf;
+    s.source = state.heap[f.buffer].id;
+    const so = allocObject('series', s, '');
+    state.heap[so.id] = so;
+    so.repr = pandasRepr('series', s, state);
+    return so.id;
+  }
+  throw new Error(`TypeError: '${obj.type}' has no .loc (line ${line})`);
+}
+
+/** `df.iloc[i]` / `s.iloc[i]` → a live position-based row view. */
+function frameIlocRow(objId: string, i0: RtValue, state: MemoryState, line: number): RtValue {
+  const i = Number(i0);
+  if (Number.isNaN(i)) throw new Error(`TypeError: iloc takes an integer (line ${line})`);
+  const obj = state.heap[objId];
+  if (!obj) throw new Error(`TypeError: bad iloc target (line ${line})`);
+
+  if (obj.type === 'series') {
+    const s = obj.value as PandasSeriesValue;
+    const n = frameRowCount(s);
+    const idx = i < 0 ? n + i : i;
+    if (idx < 0 || idx >= n) throw new Error(`IndexError: iloc out of range (line ${line})`);
+    return seriesValues(objId, state)[idx]!;
+  }
+  if (obj.type === 'dataframe') {
+    const f = obj.value as PandasDataFrameValue;
+    const n = frameRowCount(f);
+    const idx = i < 0 ? n + i : i;
+    if (idx < 0 || idx >= n) throw new Error(`IndexError: iloc out of range (line ${line})`);
+    const row: number[] = [];
+    for (const c of f.columns) row.push(frameColumn(objId, c, state)[idx]!);
+    const s: PandasSeriesValue = {
+      buffer: makePandasBuffer(row, f.dtype, state),
+      offset: 0,
+      length: f.columns.length,
+      dtype: f.dtype,
+      index: [...f.columns],
+      view: true,
+      source: state.heap[f.buffer].id,
+    };
+    const so = allocObject('series', s, '');
+    state.heap[so.id] = so;
+    so.repr = pandasRepr('series', s, state);
+    return so.id;
+  }
+  throw new Error(`TypeError: '${obj.type}' has no .iloc (line ${line})`);
+}
+
+/** `s.iloc[a:b]` / `df.iloc[a:b]` → a window (view) over a row range. */
+function frameIlocSlice(objId: string, start: RtValue, stop: RtValue, state: MemoryState, line: number): RtValue {
+  const obj = state.heap[objId];
+  if (!obj) throw new Error(`TypeError: bad iloc target (line ${line})`);
+  const a = start === null ? 0 : Number(start);
+  let e = stop === null ? 0 : Number(stop);
+
+  if (obj.type === 'series') {
+    const s = obj.value as PandasSeriesValue;
+    const n = frameRowCount(s);
+    e = stop === null ? n : e;
+    // a row-range of a Series is a *view*: a new window over the same buffer.
+    const v: PandasSeriesValue = {
+      buffer: s.buffer,
+      offset: s.offset + a,
+      length: Math.max(0, e - a),
+      dtype: s.dtype,
+      index: s.index.slice(a, e),
+      view: true,
+      name: s.name,
+    };
+    const o = allocObject('series', v, '');
+    state.heap[o.id] = o;
+    o.repr = pandasRepr('series', v, state);
+    return o.id;
+  }
+
+  if (obj.type === 'dataframe') {
+    const f = obj.value as PandasDataFrameValue;
+    const n = frameRowCount(f);
+    e = stop === null ? n : e;
+    // a row-range of a DataFrame is a *view*: a new window onto the SAME
+    // buffer at an offset. No data is copied — exactly the numpy idea.
+    const rowStart = frameRowStart(f) + a;
+    const v: PandasDataFrameValue = {
+      buffer: state.heap[f.buffer].id,
+      columns: [...f.columns],
+      index: f.index.slice(a, e),
+      dtype: f.dtype,
+      view: true,
+      rowOffset: rowStart,
+      source: state.heap[f.buffer].id,
+    };
+    const o = allocObject('dataframe', v, '');
+    state.heap[o.id] = o;
+    o.repr = pandasRepr('dataframe', v, state);
+    return o.id;
+  }
+  throw new Error(`TypeError: '${obj.type}' has no .iloc (line ${line})`);
+}
+
+/** `s.iloc[i] = v` / `df.iloc[i] = v` → write through the shared buffer. */
+function frameIlocSet(objId: string, i0: RtValue, value: RtValue, state: MemoryState, line: number): void {
+  const i = Number(i0);
+  const obj = state.heap[objId];
+  if (!obj) throw new Error(`TypeError: bad iloc target (line ${line})`);
+  if (obj.type === 'series') {
+    const s = obj.value as PandasSeriesValue;
+    const n = frameRowCount(s);
+    const idx = i < 0 ? n + i : i;
+    if (idx < 0 || idx >= n) throw new Error(`IndexError: iloc out of range (line ${line})`);
+    const data = (state.heap[s.buffer].value as PandasBufferValue).data;
+    data[s.offset + idx] = Number(value);
+    obj.repr = pandasRepr('series', s, state);
+    return;
+  }
+  if (obj.type === 'dataframe') {
+    const f = obj.value as PandasDataFrameValue;
+    const n = frameRowCount(f);
+    const idx = i < 0 ? n + i : i;
+    if (idx < 0 || idx >= n) throw new Error(`IndexError: iloc out of range (line ${line})`);
+    // value is a list (one per column); write the whole row into the buffer
+    const listObj = state.heap[value as string];
+    if (!listObj || listObj.type !== 'list') throw new Error(`TypeError: df.iloc row needs a list (line ${line})`);
+    const cells = listObj.value as RtValue[];
+    const rowStart = frameRowStart(f);
+    const data = (state.heap[f.buffer].value as PandasBufferValue).data;
+    for (let c = 0; c < f.columns.length; c++) data[(rowStart + idx) * f.columns.length + c] = Number(cells[c] ?? 0);
+    obj.repr = pandasRepr('dataframe', f, state);
+    return;
+  }
+  throw new Error(`TypeError: '${obj.type}' has no .iloc (line ${line})`);
+}
+
+/** `x.copy()` on a Series/DataFrame → a new owning buffer. */
+function frameCopy(objId: string, state: MemoryState, line: number): RtValue {
+  const obj = state.heap[objId];
+  if (!obj) throw new Error(`TypeError: bad copy target (line ${line})`);
+  if (obj.type === 'series') {
+    const s = obj.value as PandasSeriesValue;
+    const win = seriesValues(objId, state);
+    const v: PandasSeriesValue = {
+      buffer: makePandasBuffer([...win], s.dtype, state),
+      offset: 0,
+      length: win.length,
+      dtype: s.dtype,
+      index: s.index.slice(s.offset, s.offset + s.length),
+      view: false,
+      name: s.name,
+    };
+    const o = allocObject('series', v, '');
+    state.heap[o.id] = o;
+    o.repr = pandasRepr('series', v, state);
+    return o.id;
+  }
+  if (obj.type === 'dataframe') {
+    const f = obj.value as PandasDataFrameValue;
+    const data = (state.heap[f.buffer].value as PandasBufferValue).data;
+    const rowStart = frameRowStart(f);
+    const nRows = frameRowCount(f);
+    const win = data.slice(rowStart * f.columns.length, (rowStart + nRows) * f.columns.length);
+    const v: PandasDataFrameValue = {
+      buffer: makePandasBuffer([...win], f.dtype, state),
+      columns: [...f.columns],
+      index: [...f.index],
+      dtype: f.dtype,
+      view: false,
+    };
+    const o = allocObject('dataframe', v, '');
+    state.heap[o.id] = o;
+    o.repr = pandasRepr('dataframe', v, state);
+    return o.id;
+  }
+  throw new Error(`TypeError: '${obj.type}' has no .copy() (line ${line})`);
+}
+
+/** `s.sum()` / `df.sum()` → reduce (Series: one scalar; DF: per-column Series). */
+function frameSum(objId: string, state: MemoryState, line: number): RtValue {
+  const obj = state.heap[objId];
+  if (!obj) throw new Error(`TypeError: bad sum target (line ${line})`);
+  if (obj.type === 'series') {
+    return seriesValues(objId, state).reduce((a, b) => a + b, 0);
+  }
+  if (obj.type === 'dataframe') {
+    const f = obj.value as PandasDataFrameValue;
+    const sums = f.columns.map((c) => frameColumn(objId, c, state).reduce((a, b) => a + b, 0));
+    const s: PandasSeriesValue = {
+      buffer: makePandasBuffer(sums, 'float64', state),
+      offset: 0,
+      length: sums.length,
+      dtype: 'float64',
+      index: [...f.columns],
+      view: false,
+      name: 'sum',
+    };
+    const o = allocObject('series', s, '');
+    state.heap[o.id] = o;
+    o.repr = pandasRepr('series', s, state);
+    return o.id;
+  }
+  throw new Error(`TypeError: '${obj.type}' has no .sum() (line ${line})`);
+}
+
+/** `df['col']` / `df[['c1','c2']]` → a Series or column-subset DataFrame. */
+function frameSubscript(dfId: string, key: RtValue, state: MemoryState, line: number): RtValue {
+  return frameGetColumn(dfId, key, state, line);
+}
+
+/** `df['col'] = list` → replace a column's values in the shared buffer. */
+function frameSetColumn(dfId: string, colKey: RtValue, value: RtValue, state: MemoryState, line: number): void {
+  const f = state.heap[dfId].value as PandasDataFrameValue;
+  const col = colName(displayValue(colKey, state));
+  if (!f.columns.includes(col)) throw new Error(`KeyError: column '${col}' (line ${line})`);
+  const listObj = state.heap[value as string];
+  if (!listObj || listObj.type !== 'list') throw new Error(`TypeError: assigning a column needs a list (line ${line})`);
+  const cells = listObj.value as RtValue[];
+  const nRows = frameRowCount(f);
+  const ci = f.columns.indexOf(col);
+  const rowStart = frameRowStart(f);
+  const data = (state.heap[f.buffer].value as PandasBufferValue).data;
+  for (let r = 0; r < nRows; r++) data[(rowStart + r) * f.columns.length + ci] = Number(cells[r] ?? 0);
+  state.heap[dfId].repr = pandasRepr('dataframe', f, state);
+}
+
+/**
+ * `pd.read_csv(name, {col: [...], ...})` → a DataFrame. Structure-only (the
+ * fidelity boundary: the sandbox has no disk): the file's parsed content is
+ * supplied explicitly, and the result is a real DataFrame whose structure is
+ * the teaching point — the box is labeled with the source filename.
+ */
+function readCsv(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length !== 2) throw new Error(`TypeError: read_csv(name, data) takes two arguments (line ${line})`);
+  // a string-literal filename is a raw value; a bound name resolves to its str
+  const name = typeof args[0] === 'string'
+    ? (state.heap[args[0]] ? displayValue(args[0], state) : args[0])
+    : displayValue(args[0], state);
+  const dfId = makeDataFrame([args[1]], state, line) as string;
+  const df = state.heap[dfId];
+  // label the box with the file it "came from" — the memory-model story
+  df.repr = `DataFrame (from ${name})\n${df.repr.slice('DataFrame\n'.length)}`;
+  return dfId;
+}
+
 /**
  * Python-style string repr using single quotes.
  */
@@ -1206,6 +1733,10 @@ function compareOp(op: string, left: RtValue, right: RtValue, state: MemoryState
 function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: number): RtValue {
   const obj = state.heap[objId as string];
   if (!obj) throw new Error(`TypeError: object is not subscriptable (line ${line})`);
+  // df['col'] / df[['c1','c2']] — read a column or column subset
+  if (obj.type === 'dataframe') {
+    return frameSubscript(objId as string, index, state, line);
+  }
   if (obj.type === 'list' || obj.type === 'tuple') {
     const value = obj.value as RtValue[];
     const i = Number(index);

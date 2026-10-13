@@ -3,7 +3,7 @@
  */
 
 import type { MemoryState, RtValue } from '../engine/types';
-import { isDefaultDictValue, isIteratorValue, isMapFilterValue, isNdarrayValue, type RefEdge } from '../engine/memory';
+import { isDefaultDictValue, isIteratorValue, isMapFilterValue, isNdarrayValue, isPandasValue, type RefEdge } from '../engine/memory';
 
 const COLORS = {
   bg: 'transparent',
@@ -126,6 +126,8 @@ function containerRefs(obj: { type: string; value: unknown }): string[] {
   const { type, value } = obj;
   // ndarray → the buffer it views
   if (isNdarrayValue(value)) return [value.buffer];
+  // a pandas Series/DataFrame → its buffer box (window over a buffer)
+  if (isPandasValue(value)) return [value.buffer];
   if (type === 'list' || type === 'tuple' || type === 'set') {
     return (value as RtValue[]).filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
@@ -140,10 +142,12 @@ function containerRefs(obj: { type: string; value: unknown }): string[] {
   return [];
 }
 
-function objectHeight(obj: { type: string; value: unknown }): number {
+function objectHeight(obj: { type: string; value: unknown; repr?: string }): number {
   const { type, value } = obj;
   // ndarray carries a tag line (dtype/shape/view) under the value — taller box.
   if (type === 'ndarray') return 62;
+  // a pandas box renders a small table (header + one line per row/column)
+  if (type === 'series' || type === 'dataframe') return pandasBoxHeight(obj.repr ?? '');
   if (type === 'list' || type === 'tuple' || type === 'set') {
     return 36 + Math.max((value as unknown[]).length, 1) * OBJ_ROW_H;
   }
@@ -155,6 +159,12 @@ function objectHeight(obj: { type: string; value: unknown }): number {
     return 36 + Math.max(entries.length, 1) * OBJ_ROW_H;
   }
   return 44;
+}
+
+/** A pandas box shows a table: 1 header line + 1 line per row. */
+function pandasBoxHeight(repr: string): number {
+  const lines = repr.split('\n').length;
+  return 34 + lines * OBJ_ROW_H;
 }
 
 interface Layout {
@@ -232,6 +242,17 @@ function drawObject(svg: SVGSVGElement, x: number, y: number, w: number, h: numb
     const ndv = obj.value as { dtype: string; shape: number; view: boolean; buffer: string };
     addText(g, x + 14, y + 30, obj.repr, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
     addText(g, x + 14, y + 48, `${ndv.dtype}[${ndv.shape}] · ${ndv.view ? 'view' : 'own'} → ${ndv.buffer}`, COLORS.amber, 10, 'start', 'middle', 'IBM Plex Mono, monospace');
+  } else if ((obj.type === 'series' || obj.type === 'dataframe') && isPandasValue(obj.value)) {
+    // a pandas box: a small table (one line per row) + a tag to its buffer
+    const pv = obj.value as { view: boolean; buffer: string };
+    const lines = obj.repr.split('\n');
+    const head = lines[0] ?? '';
+    addText(g, x + 14, y + 30, head, COLORS.amber, 11, 'start', 'middle', 'IBM Plex Mono, monospace');
+    for (let i = 1; i < lines.length; i++) {
+      addText(g, x + 14, y + 30 + i * OBJ_ROW_H, lines[i] ?? '', COLORS.ink, 11, 'start', 'middle', 'IBM Plex Mono, monospace');
+    }
+    const tagY = y + 30 + lines.length * OBJ_ROW_H;
+    addText(g, x + 14, tagY, `${obj.type} · ${pv.view ? 'view' : 'own'} → ${pv.buffer}`, COLORS.amber, 10, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else if (obj.type === 'buffer') {
     // buffer: the flat run of numbers an ndarray window views
     addText(g, x + 14, y + 32, obj.repr, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
