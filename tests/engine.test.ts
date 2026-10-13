@@ -364,3 +364,79 @@ describe('defaultdict + functional (Phase 0c/0d)', () => {
     expect(preds.isDefaultDict('d')(snapshot(plain))).toBe(false);
   });
 });
+
+describe('numpy (Phase 1)', () => {
+  test('np.array builds an ndarray backed by a separate buffer', () => {
+    const state = runFresh('import numpy as np\na = np.array([1, 2, 3])');
+    const a = state.frames[0].locals.a as string;
+    const o = state.heap[a];
+    expect(o.type).toBe('ndarray');
+    const v = o.value as { buffer: string };
+    const buf = state.heap[v.buffer];
+    expect(buf.type).toBe('buffer');
+    expect(buf.repr).toBe('[1, 2, 3]');
+  });
+
+  test('ndarray repr mirrors numpy float style', () => {
+    const state = runFresh('import numpy as np\na = np.array([1, 2, 3])');
+    expect(state.heap[state.frames[0].locals.a as string].repr).toBe('[1. 2. 3.]');
+  });
+
+  test('.copy() mints a new buffer (independent)', () => {
+    const state = runFresh('import numpy as np\na = np.array([1, 2])\nb = a.copy()');
+    const a = state.frames[0].locals.a as string;
+    const b = state.frames[0].locals.b as string;
+    const bufA = (state.heap[a].value as { buffer: string }).buffer;
+    const bufB = (state.heap[b].value as { buffer: string }).buffer;
+    expect(bufA).not.toBe(bufB);
+  });
+
+  test('a slice is a view sharing the SAME buffer', () => {
+    const state = runFresh('import numpy as np\na = np.array([1, 2, 3])\nv = a[:2]');
+    const a = state.frames[0].locals.a as string;
+    const v = state.frames[0].locals.v as string;
+    const vObj = state.heap[v];
+    expect(vObj.type).toBe('ndarray');
+    const vv = vObj.value as { buffer: string; view: boolean };
+    const av = state.heap[a].value as { buffer: string };
+    expect(vv.buffer).toBe(av.buffer); // same buffer
+    expect(vv.view).toBe(true);
+    // the buffer keeps the full run; the view is a window over its front
+    expect(state.heap[vv.buffer].repr).toBe('[1, 2, 3]');
+    expect(state.heap[v].repr).toBe('[1. 2.]');
+  });
+
+  test('a view mutation is seen through the original (shared buffer)', () => {
+    const state = runFresh('import numpy as np\na = np.array([1, 2, 3])\nv = a[:2]\nv[0] = 9');
+    const a = state.frames[0].locals.a as string;
+    const buf = (state.heap[a].value as { buffer: string }).buffer;
+    expect(state.heap[buf].repr).toBe('[9, 2, 3]');
+  });
+
+  test('vectorized a + 1 builds a new independent buffer', () => {
+    const state = runFresh('import numpy as np\na = np.array([1, 2])\nb = a + 1');
+    const b = state.frames[0].locals.b as string;
+    const bObj = state.heap[b];
+    expect(bObj.type).toBe('ndarray');
+    expect(bObj.repr).toBe('[2. 3.]');
+    const bufA = (state.heap[state.frames[0].locals.a as string].value as { buffer: string }).buffer;
+    const bufB = (bObj.value as { buffer: string }).buffer;
+    expect(bufA).not.toBe(bufB);
+  });
+
+  test('.sum() folds the buffer into a scalar', () => {
+    const state = runFresh('import numpy as np\na = np.array([1, 2, 3])\ns = a.sum()');
+    expect(state.frames[0].locals.s).toBe(6);
+  });
+
+  test('numpy predicates: isNdarray, sharesBuffer, independentBuffer', () => {
+    const view = runFresh('import numpy as np\na = np.array([1, 2, 3])\nv = a[:2]');
+    expect(preds.isNdarray('a')(snapshot(view), view)).toBe(true);
+    expect(preds.sharesBuffer('a', 'v')(snapshot(view), view)).toBe(true);
+    expect(preds.independentBuffer('a', 'v')(snapshot(view), view)).toBe(false);
+
+    const copy = runFresh('import numpy as np\na = np.array([1, 2])\nb = a.copy()');
+    expect(preds.sharesBuffer('a', 'b')(snapshot(copy), copy)).toBe(false);
+    expect(preds.independentBuffer('a', 'b')(snapshot(copy), copy)).toBe(true);
+  });
+});

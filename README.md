@@ -41,7 +41,7 @@ Type Python-subset statements. Meta-commands:
 | Command | Effect |
 |---------|--------|
 | `help` | subset + meta overview |
-| `levels` | list the 35 levels / 9 series |
+| `levels` | list the 40 levels / 10 series |
 | `level <id>` | load a level (e.g. `level first-name`) |
 | `lesson` | open the current level's lesson text |
 | `goal` / `guide` | focus the right-hand guide panel |
@@ -63,22 +63,23 @@ A deliberately small, pedagogically sharp subset — not CPython:
 - **Methods:** `.append` `.insert` `.extend` `.pop` `.remove` `.copy` `.get` `.update` `.keys` `.clear`
 - **Functions:** `def` / call / `return`, local frames, nested calls
 - **Builtins:** `print` `len` `type` `id` `str` `int` `bool` `list` `dict` `set`
-- **Modules:** `import copy as cp` — `cp.copy` (shallow) and `cp.deepcopy`; `import collections as c` — `c.defaultdict`; `import functools as f` — `f.reduce`
+- **Modules:** `import copy as cp` — `cp.copy` (shallow) and `cp.deepcopy`; `import collections as c` — `c.defaultdict`; `import functools as f` — `f.reduce`; `import numpy as np` — `np.array`, `.copy()`, slicing (views), `+`, `.sum()`
 - **Iterators:** `iter(x)` and `next(it)` — a stateful iterator object you advance by hand
 - **Functional:** `map(fn, it)` / `filter(pred, it)` — lazy iterator objects; `f.reduce(fn, it)` — an eager fold
+- **NumPy:** `np.array` → an ndarray *window* over a separate **buffer** box; `.copy()` mints a new buffer; a slice is a *view* sharing the same buffer; `a + 1` vectorizes into a new buffer; `a.sum()` folds to a scalar
 - **Plotting:** `scatter(xs, ys, "title")` `line(xs, ys, "title")`
 - **Operators:** arithmetic, comparisons, `is`, `==`
 
-Not in v0: classes, real module imports (only the simulated `copy`, `collections`, `functools`), control flow (`if`/`for`/`while`), exceptions (beyond clean parse/runtime errors), comprehensions, I/O, async, `range`/`sorted`/`min`/`max`, full CPython semantics.
+Not in v0: classes, real module imports (only the simulated `copy`, `collections`, `functools`, `numpy`), control flow (`if`/`for`/`while`), exceptions (beyond clean parse/runtime errors), comprehensions, I/O, async, `range`/`sorted`/`min`/`max`, full CPython semantics.
 
-A planned curriculum extends this with numpy, pandas, re, datetime and more — all drawn on the same memory canvas. See `docs/ENGINE-EXTENSION.md` and `docs/adr/002-library-modules.md`.
+A planned curriculum extends this with pandas, re, datetime and more — all drawn on the same memory canvas. See `docs/ENGINE-EXTENSION.md` and `docs/adr/002-library-modules.md`.
 
 ## Architecture
 
 ```
 src/engine/    simulated runtime (tokenizer, parser, evaluator, memory, session)
                + goal checks (checks.ts) — the "TreeCompare" analogue
-src/levels/    9-series / 35-level catalog + per-level goals, par, solutions
+src/levels/    10-series / 40-level catalog + per-level goals, par, solutions
 src/ui/        app shell, memory canvas, plot board, REPL, dialog, script editor
 src/style.css  design tokens + layout
 tests/         vitest unit + level-solution tests
@@ -90,7 +91,7 @@ The engine is intentionally a **teaching subset**, not CPython. Every state tran
 
 ## Levels
 
-Nine series — Names & Bindings, Aliasing & Copy, Containers in Memory, **Copy Semantics** (shallow vs deep), **Iterators & Iterables**, **Defaults & Functional** (defaultdict, map, filter), Mutation & Methods, Functions & Frames, Plotting & Capstone. Each of the 35 levels has a brief, optional hint, a goal (predicate or target snapshot), a statement-par for golf, and a worked solution.
+Ten series — Names & Bindings, Aliasing & Copy, Containers in Memory, **Copy Semantics** (shallow vs deep), **Iterators & Iterables**, **Defaults & Functional** (defaultdict, map, filter), **NumPy: Buffers & Views** (ndarray, buffer, `.copy()`, slice-as-view), Mutation & Methods, Functions & Frames, Plotting & Capstone. Each of the 40 levels has a brief, optional hint, a goal (predicate or target snapshot), a statement-par for golf, and a worked solution.
 
 ## Tech
 

@@ -165,7 +165,7 @@ Every library `L` is built by filling this contract:
 | Library | `type` | `value` shape | Canvas box |
 |---------|--------|---------------|------------|
 | `copy` | *(none — reuses list/dict)* | — | *(existing)* |
-| `numpy` | `ndarray` | `{ buffer: id, shape, dtype, view?: bool }` | ndarray box → buffer box (grid) |
+| `numpy` | `ndarray` / `buffer` | ndarray `{ buffer: id, offset, shape, dtype, view }` → buffer `{ data: number[], dtype }` | ndarray box → buffer box; a slice shares the buffer (view), `.copy()` mints a new one |
 | `pandas` | `Series` / `DataFrame` | `{ buffer: id, index, columns?, dtype }` | box → buffer; DF shows column headers |
 | `beautifulsoup` | `DomNode` | `{ tag, children: id[] }` | **heap tree** (parent→child edges) |
 | `re` | `Pattern` / `Match` | `{ source }` / `{ span, groups: id[] }` | box + group chips |
