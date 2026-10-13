@@ -10,7 +10,7 @@ import { checkGoal } from '../engine/checks';
 import type { GoalSpec, Level, MemoryState, Snapshot } from '../engine/types';
 import { splitPythonStatements } from '../engine/steps';
 import { allLevels, getLevel, levelIndex, sequences } from '../levels/index';
-import { renderMemory } from './memory';
+import { renderMemory, renderRam } from './memory';
 import { BoardView } from './board';
 import { TerminalView } from './terminal';
 import { ScriptEditorView } from './editor';
@@ -179,9 +179,10 @@ export class App {
     this.board = new BoardView(
       this.root.querySelector('#board-wrap')!,
       (tab) => {
-        // After a tab switch the #canvas is rebuilt; redraw memory if we're back
-        // on the Memory tab.
+        // After a tab switch its canvas is rebuilt; redraw whichever tab we
+        // just landed on.
         if (tab === 'memory') this.renderBoard();
+        if (tab === 'ram') this.renderRamBoard();
       },
     );
     this.editor = new ScriptEditorView(
@@ -303,7 +304,7 @@ export class App {
     this.terminal.setHint(goalLines[0] ?? null);
 
     this.board.setPlots(this.session.state.plots);
-    this.renderBoard();
+    this.renderBoards();
     this.refreshDock();
     this.updateTitle();
 
@@ -333,7 +334,7 @@ export class App {
 
     this.session.reset();
     this.board.setPlots([]);
-    this.renderBoard();
+    this.renderBoards();
     this.renderDock();
     this.updateTitle();
   }
@@ -354,6 +355,17 @@ export class App {
     const edges = referenceEdges(state);
     const live = liveObjectIds(state);
     renderMemory(this.board.canvasEl, state, edges, live);
+  }
+
+  private renderRamBoard(): void {
+    const state = this.session.state;
+    renderRam(this.board.ramCanvasEl, state, liveObjectIds(state));
+  }
+
+  /** Redraw both memory boards so the Memory and RAM tabs stay in sync. */
+  private renderBoards(): void {
+    this.renderBoard();
+    this.renderRamBoard();
   }
 
   /* —— Execution & verification —— */
@@ -384,7 +396,7 @@ export class App {
     }
 
     this.board.setPlots(this.session.state.plots);
-    this.renderBoard();
+    this.renderBoards();
     if (this.level) this.checkVerification(source);
   }
 
@@ -649,7 +661,7 @@ export class App {
     this.statementsUsed = prev.statementsUsed;
     this.levelCompleted = false;
     this.terminal.push('meta', 'Undid last statement.');
-    this.renderBoard();
+    this.renderBoards();
     this.board.setPlots(state.plots);
     this.refreshDock();
   }

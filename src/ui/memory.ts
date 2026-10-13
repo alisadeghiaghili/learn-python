@@ -298,6 +298,157 @@ function drawEdge(parent: SVGElement, from: Pos, to: Pos, opacity = 1): void {
   }
 }
 
+/**
+ * The RAM view: a dense memory map showing where each object *lives* — its
+ * address, size, and reference count — rather than the abstract graph. Columns:
+ * ADDR (hex, monotonic like malloc) · OBJ (id) · TYPE · BYTES · REFC · VALUE.
+ *
+ * For a numpy buffer the VALUE cell draws the raw byte cells; every ndarray
+ * window over that buffer then paints its own offset/shape window as a tinted
+ * strip beneath the cells — the flagship "how it works in RAM" picture, where
+ * a slice is just a narrower window over the same contiguous run.
+ */
+export function renderRam(svg: SVGSVGElement, state: MemoryState, liveIds: string[]): void {
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const ids = liveIds.filter((id) => state.heap[id]);
+  const HEADER_X = 14;
+  const COL_OBJ = HEADER_X + 56;
+  const COL_TYPE = COL_OBJ + 92;
+  const COL_BYTES = COL_TYPE + 96;
+  const COL_REF = COL_BYTES + 64;
+  const COL_VALUE = COL_REF + 52;
+  const VALUE_W = 360;
+  const width = COL_VALUE + VALUE_W + 20;
+  const ROW_H = 24;
+  const ROW_GAP = 8;
+  const mono = 'IBM Plex Mono, monospace';
+  const CELL_W = 30;
+  const CELL_GAP = 2;
+  const CELL_H = 16;
+  const VIEW_H = 14;
+
+  // One color per ndarray view over a given buffer, so multiple overlapping
+  // windows stay distinguishable in the column strip.
+  const VIEW_PALETTE = [COLORS.amber, COLORS.coral, COLORS.teal];
+
+  const bufferInfo = new Map<string, { data: number[]; y: number }>();
+  const viewLists = new Map<string, string[]>(); // bufferId -> ndarray ids in order
+  for (const id of ids) {
+    const obj = state.heap[id]!;
+    if (obj.type === 'ndarray' && isNdarrayValue(obj.value)) {
+      const v = obj.value as { buffer: string };
+      const list = viewLists.get(v.buffer) ?? [];
+      list.push(id);
+      viewLists.set(v.buffer, list);
+    }
+  }
+  const rowH = (obj: { id: string; type: string }): number => {
+    if (obj.type !== 'buffer') return ROW_H;
+    const n = viewLists.get(obj.id)?.length ?? 0;
+    return 48 + n * VIEW_H;
+  };
+  const totalH = Math.max(ids.reduce((acc, id) => acc + rowH(state.heap[id]!) + ROW_GAP, 26), 220);
+
+  svg.setAttribute('viewBox', `0 0 ${width} ${totalH}`);
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', String(Math.max(totalH, 200)));
+
+  // Column header band
+  addText(svg, HEADER_X, 18, 'ADDR', COLORS.muted, 10, 'start', 'middle', mono);
+  addText(svg, COL_OBJ, 18, 'OBJ', COLORS.muted, 10, 'start', 'middle', mono);
+  addText(svg, COL_TYPE, 18, 'TYPE', COLORS.muted, 10, 'start', 'middle', mono);
+  addText(svg, COL_BYTES, 18, 'BYTES', COLORS.muted, 10, 'start', 'middle', mono);
+  addText(svg, COL_REF, 18, 'REFC', COLORS.muted, 10, 'start', 'middle', mono);
+  addText(svg, COL_VALUE, 18, 'VALUE', COLORS.muted, 10, 'start', 'middle', mono);
+
+  let y = 34;
+  for (const id of ids) {
+    const obj = state.heap[id]!;
+    const h = rowH(obj);
+    const midY = y + h / 2;
+    const isBuffer = obj.type === 'buffer';
+
+    // row divider
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', String(HEADER_X));
+    line.setAttribute('x2', String(width - 14));
+    line.setAttribute('y1', String(y));
+    line.setAttribute('y2', String(y));
+    line.setAttribute('stroke', COLORS.line);
+    line.setAttribute('stroke-width', '1');
+    svg.appendChild(line);
+
+    addText(svg, HEADER_X, midY, hexAddr(obj.addr), COLORS.amber, 11, 'start', 'middle', mono);
+    addText(svg, COL_OBJ, midY, obj.id, COLORS.ink, 11, 'start', 'middle', mono);
+    addText(svg, COL_TYPE, midY, obj.type, COLORS.teal, 11, 'start', 'middle', mono);
+    addText(svg, COL_BYTES, midY, String(obj.byteSize), COLORS.ink, 11, 'start', 'middle', mono);
+    addText(svg, COL_REF, midY, String(obj.refCount), obj.refCount === 0 ? COLORS.coral : COLORS.ink, 11, 'start', 'middle', mono);
+
+    if (isBuffer) {
+      const data = (obj.value as { data?: number[] }).data ?? [];
+      const barY = y + ROW_H + 4;
+      for (let i = 0; i < data.length; i++) {
+        const cx = COL_VALUE + i * (CELL_W + CELL_GAP);
+        const cell = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        cell.setAttribute('x', String(cx));
+        cell.setAttribute('y', String(barY));
+        cell.setAttribute('width', String(CELL_W));
+        cell.setAttribute('height', String(CELL_H));
+        cell.setAttribute('rx', '3');
+        cell.setAttribute('fill', '#223038');
+        cell.setAttribute('stroke', COLORS.line);
+        svg.appendChild(cell);
+        addText(svg, cx + CELL_W / 2, barY + CELL_H / 2, String(data[i]), COLORS.ink, 10, 'middle', 'middle', mono);
+      }
+      addText(svg, COL_VALUE, midY, `${hexAddr(obj.addr)} · ${data.length}×8B`, COLORS.muted, 10, 'start', 'middle', mono);
+      bufferInfo.set(id, { data, y: barY });
+    } else {
+      const label = obj.type === 'ndarray'
+        ? `${obj.repr}`
+        : obj.repr.length > 40 ? obj.repr.slice(0, 40) + '…' : obj.repr;
+      addText(svg, COL_VALUE, midY, label, COLORS.ink, 11, 'start', 'middle', mono);
+    }
+
+    // An ndarray view: paint its window in its buffer's column strip, aligned
+    // to the same byte columns. Multiple views over one buffer stack as separate
+    // rows, each showing the exact [offset..offset+shape) range it reads.
+    if (obj.type === 'ndarray' && isNdarrayValue(obj.value)) {
+      const v = obj.value as { buffer: string; offset: number; shape: number };
+      const buf = bufferInfo.get(v.buffer);
+      const list = viewLists.get(v.buffer) ?? [];
+      const idx = list.indexOf(id);
+      const bufLen = buf ? buf.data.length : 0;
+      if (buf) {
+        const color = VIEW_PALETTE[idx % VIEW_PALETTE.length];
+        const barY = buf.y + CELL_H + 4 + idx * VIEW_H;
+        const x = COL_VALUE + v.offset * (CELL_W + CELL_GAP);
+        const w = Math.max(v.shape, 1) * (CELL_W + CELL_GAP) - CELL_GAP;
+        const win = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        win.setAttribute('x', String(x));
+        win.setAttribute('y', String(barY));
+        win.setAttribute('width', String(w));
+        win.setAttribute('height', String(VIEW_H - 4));
+        win.setAttribute('rx', '2');
+        win.setAttribute('fill', color);
+        win.setAttribute('fill-opacity', '0.28');
+        win.setAttribute('stroke', color);
+        win.setAttribute('stroke-width', '1');
+        svg.appendChild(win);
+        // Label in a gutter just past the buffer cells so it never collides.
+        const labelX = COL_VALUE + Math.max(bufLen, v.offset + v.shape) * (CELL_W + CELL_GAP) + 8;
+        addText(svg, labelX, barY + (VIEW_H - 4) / 2, `${obj.id}  [${v.offset}..${v.offset + v.shape}]`, color, 9, 'start', 'middle', mono);
+      }
+    }
+
+    y += h + ROW_GAP;
+  }
+}
+
+function hexAddr(addr: number): string {
+  return `0x${addr.toString(16).padStart(4, '0')}`;
+}
+
 function addText(parent: SVGElement, x: number, y: number, text: string, fill: string, size: number, anchor: string, baseline: string, family = 'IBM Plex Sans, sans-serif'): void {
   const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
   t.setAttribute('x', String(x));
