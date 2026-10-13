@@ -50,3 +50,10 @@ export function getLevel(id: string): Level | null {
 export function levelIndex(id: string): number {
   return allLevels().findIndex((l) => l.id === id);
 }
+
+/**
+ * The series a level belongs to (for its deep lesson), or null.
+ */
+export function sequenceForLevel(id: string): Sequence | null {
+  return sequences.find((s) => s.levels.some((l) => l.id === id)) ?? null;
+}

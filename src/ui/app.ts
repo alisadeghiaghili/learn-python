@@ -7,9 +7,9 @@
 
 import { createSession, type Session, referenceEdges, liveObjectIds } from '../engine/session';
 import { checkGoal } from '../engine/checks';
-import type { GoalSpec, Level, MemoryState, Snapshot } from '../engine/types';
+import type { GoalSpec, Level, MemoryState, Sequence, Snapshot } from '../engine/types';
 import { splitPythonStatements } from '../engine/steps';
-import { allLevels, getLevel, levelIndex, sequences } from '../levels/index';
+import { allLevels, getLevel, levelIndex, sequenceForLevel, sequences } from '../levels/index';
 import { renderMemory, renderRam } from './memory';
 import { BoardView } from './board';
 import { TerminalView } from './terminal';
@@ -695,7 +695,10 @@ export class App {
             </button>`;
           })
           .join('');
-        return `<div class="series-block"><h3>${escapeHtml(s.title)}</h3><div class="level-list">${rows}</div></div>`;
+        const deepBtn = s.deepLesson
+          ? `<button type="button" class="series-deep" data-deep="${escapeHtml(s.id)}" title="Read the full ${escapeHtml(s.title)} lesson (ELI5→ELI-PHD)">▤ deep lesson</button>`
+          : '';
+        return `<div class="series-block"><h3>${escapeHtml(s.title)}</h3><div class="level-list">${rows}</div>${deepBtn}</div>`;
       })
       .join('');
 
@@ -720,6 +723,13 @@ export class App {
         if (id) this.enterLevel(id, { openLesson: true });
       });
     });
+    modal.el.querySelectorAll<HTMLButtonElement>('[data-deep]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const seq = sequences.find((s) => s.id === btn.dataset.deep);
+        modal.close();
+        if (seq) this.openDeepLesson(seq);
+      });
+    });
   }
 
   private openLesson(): void {
@@ -727,11 +737,43 @@ export class App {
       this.openWelcome();
       return;
     }
-    const lesson =
-      this.level.brief + '\n\n' + (this.level.hint ? `**Hint:** ${this.level.hint}` : '');
+    const level = this.level;
+    const seq = sequenceForLevel(level.id);
+    const parts: string[] = [];
+    parts.push(`### ${level.name}`);
+    parts.push(level.brief);
+    if (level.lesson) {
+      parts.push('');
+      parts.push(level.lesson);
+    }
+    if (level.learning?.length) {
+      parts.push('', '### What this teaches');
+      for (const b of level.learning) parts.push(`- ${b}`);
+    }
+    if (level.fieldNotes?.length) {
+      parts.push('', '### In production');
+      for (const n of level.fieldNotes) parts.push(`- ${n}`);
+    }
+    if (level.hint) {
+      parts.push('', `**Hint:** ${level.hint}`);
+    }
+    const actions: ModalSpec['actions'] = [];
+    if (seq?.deepLesson) {
+      actions.push({ label: 'Deep lesson', className: 'ghost', onClick: () => this.openDeepLesson(seq) });
+    }
+    actions.push({ label: 'Close', className: 'primary', onClick: () => this.terminal.focus() });
     showModal({
-      title: `${this.level.name}`,
-      bodyHtml: renderMarkdown(lesson),
+      title: level.name,
+      bodyHtml: renderMarkdown(parts.join('\n')),
+      actions,
+      onDismiss: () => this.terminal.focus(),
+    });
+  }
+
+  private openDeepLesson(seq: Sequence): void {
+    showModal({
+      title: `${seq.title} — deep lesson`,
+      bodyHtml: renderMarkdown(seq.deepLesson ?? ''),
       actions: [{ label: 'Close', className: 'primary', onClick: () => this.terminal.focus() }],
       onDismiss: () => this.terminal.focus(),
     });
