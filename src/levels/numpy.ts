@@ -4,11 +4,107 @@
 
 import { preds } from '../engine/checks';
 import type { Sequence } from '../engine/types';
+import { schematicBlock, type SchematicSpec } from '../ui/schematic';
+
+/**
+ * The one picture the whole series is built on: a window over a buffer, where
+ * a slice is a second window over the SAME buffer (dashed) and a copy owns its
+ * own separate buffer.
+ */
+const VIEW_VS_COPY: SchematicSpec = {
+  id: 'numpy-view-vs-copy',
+  title: 'A window over a buffer — view vs copy',
+  nodes: [
+    { id: 'a', label: 'a', sub: 'ndarray · own' },
+    { id: 'v', label: 'v = a[:2]', sub: 'ndarray · view' },
+    { id: 'c', label: 'b = a.copy()', sub: 'ndarray · own' },
+    { id: 'bufA', label: 'buffer A', sub: 'float64[3]', type: 'buffer' },
+    { id: 'bufB', label: 'buffer B', sub: 'float64[2]', type: 'buffer' },
+  ],
+  edges: [
+    { from: 'a', to: 'bufA', label: 'owns' },
+    { from: 'v', to: 'bufA', label: 'same buffer', dashed: true },
+    { from: 'c', to: 'bufB', label: 'owns (new)' },
+  ],
+  legend: [
+    { color: 'amber', label: 'points at / owns' },
+    { color: 'coral', label: 'shares the buffer' },
+  ],
+};
 
 export const series: Sequence[] = [
   {
     id: 'numpy',
     title: 'NumPy: Buffers & Views',
+    deepLesson: `## ELI5
+
+A numpy array is like a **frame** you slide over a row of beads. The beads (the
+numbers) sit in one long, unbroken row — that row is the **buffer**. The frame
+is the **array**: it just says "start here, show this many beads." When you take
+a slice, you don't copy any beads; you make a *smaller frame* over the **same**
+row. When you copy, you pour the beads into a brand-new row.
+
+${schematicBlock(VIEW_VS_COPY)}
+
+## ELI10
+
+Two objects, always. \`np.array([1, 2, 3])\` allocates a **buffer** (a flat,
+contiguous run of raw numbers) and an **ndarray** — a *window* (an offset plus a
+length) that says which part of that buffer to show. The name \`a\` points at the
+window; the window points at the buffer.
+
+- \`a.copy()\` reads \`a\`'s buffer and mints a **second** buffer with the same
+  numbers. Two windows, two buffers — edits to one are invisible to the other.
+- \`a[:2]\` makes a **view**: a second window over the *same* buffer. No data
+  moves; only the offset and length change.
+- Because a view shares its buffer, \`v[0] = 9\` writes into the shared run, and
+  \`a\` sees the change. A copy, never.
+
+## ELI15
+
+The mental model that matters in real code: **a slice is a view, not a copy.**
+This is the single most common numpy foot-gun.
+
+- A slice \`a[i:j]\` is O(1) — it allocates a new window, moves no data, and
+  shares the buffer. The result's \`base\` attribute points back at the original.
+- Any operation that *builds new data* (an element-wise op like \`a + 1\`, a
+  fancy index, \`a.copy()\`) allocates a **fresh** buffer.
+- So the question to always ask: *does this expression share my data, or make
+  new data?* Chaining views is free; chaining real operations is where you pay
+  memory.
+
+## ELI20
+
+The memory mechanics, precisely.
+
+- A buffer is one contiguous \`float64\` run. An ndarray stores \`{buffer,
+  offset, shape, dtype, view}\`. Two ndarrays are "the same data" iff they
+  point at the same buffer box (that is exactly what the RAM view's shared
+  window strip shows).
+- Element-wise ops are vectorized: \`a + 1\` reads \`a\`'s window and writes a
+  new buffer. Chained expressions allocate an intermediate buffer per step —
+  the cost to watch in a hot loop.
+- \`a.sum()\` is a reduction over the window: one pass, a scalar out, no new
+  buffer.
+- Watch the RAM tab while you do this: addresses are monotonic, the buffer row
+  shows its raw byte cells, and each view paints its \`[offset..offset+shape)\`
+  window as a strip aligned to those cells.
+
+## ELI-PHD
+
+Where this model pays off and where it breaks.
+
+- **Strides & broadcast**: real ndarrays carry a stride, so a non-contiguous
+  slice is still a view (a window with a non-1 stride). This visualizer keeps a
+  flat 1-D window to stay honest about the buffer, and says so in the lessons.
+- **\`base\` / \`.copy()\` contract**: in production, \`arr.base\` is the canonical
+  "does this view own its data" check; \`copy(arr)\` and \`arr.copy()\` are the
+  escape hatch. A view outliving its buffer is the classic memory-safety trap.
+- **Performance**: prefer in-place ops and views when you don't need the
+  independence, and \`np.ascontiguousarray\` before a call that wants
+  contiguity. The identity picture — shared vs owned buffer — is the whole
+  decision: copy only when you must own the data.
+`,
     levels: [
       {
         id: 'np-make-array',

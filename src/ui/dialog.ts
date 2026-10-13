@@ -2,6 +2,8 @@
  * HTML escaping, minimal markdown, and modal dialogs (ported from learn-r).
  */
 
+import { parseSchematic, renderSchematic } from './schematic';
+
 export function escapeHtml(s: string): string {
   return s
     .replaceAll('&', '&amp;')
@@ -134,6 +136,18 @@ function renderProse(text: string): string {
   return out.join('');
 }
 
+/**
+ * Parse + render a ```schematic block, or fall back to showing the raw source
+ * if the spec is malformed (a broken diagram should read as data, not vanish).
+ */
+function renderSchematicSafe(json: string): string {
+  try {
+    return renderSchematic(parseSchematic(json));
+  } catch {
+    return `<pre class="md-code" data-lang="schematic"><code>${escapeHtml(json)}</code></pre>`;
+  }
+}
+
 export function renderMarkdown(md: string): string {
   const blocks = md.split(/```/);
   let html = '';
@@ -141,8 +155,14 @@ export function renderMarkdown(md: string): string {
     if (i % 2 === 1) {
       const firstNewline = block.indexOf('\n');
       const lang = firstNewline >= 0 ? block.slice(0, firstNewline).trim() : '';
-      const code = firstNewline >= 0 ? block.slice(firstNewline + 1) : block;
-      html += `<pre class="md-code"${lang ? ` data-lang="${escapeHtml(lang)}"` : ''}><code>${escapeHtml(code.trimEnd())}</code></pre>`;
+      const code = (firstNewline >= 0 ? block.slice(firstNewline + 1) : block).trimEnd();
+      if (lang === 'schematic') {
+        // A diagram: render the JSON spec to an inline SVG. On any parse error
+        // fall back to showing the raw source so a broken spec degrades visibly.
+        html += renderSchematicSafe(code);
+      } else {
+        html += `<pre class="md-code"${lang ? ` data-lang="${escapeHtml(lang)}"` : ''}><code>${escapeHtml(code)}</code></pre>`;
+      }
     } else {
       const sections = block.split(/(^#{1,3}\s+.*$)/m);
       for (const sec of sections) {
