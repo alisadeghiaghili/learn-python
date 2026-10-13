@@ -4,7 +4,7 @@
  * Mutates a memory state (frames + heap) and records stdout / errors.
  */
 
-import { allocObject, cloneState, createModuleState } from './memory';
+import { allocObject, cloneState, computeRefCounts, createModuleState } from './memory';
 import { parse } from './parser';
 import type {
   AstNode,
@@ -30,6 +30,8 @@ export function run(source: string, state: MemoryState): MemoryState {
     // leaving a parent container's cached repr stale. Recompute container
     // reprs so display, print, and goal checks all see the current value.
     refreshReprs(state);
+    // Recompute the refcount column for the RAM view from the now-final graph.
+    computeRefCounts(state);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     state.errors.push(message);
@@ -47,6 +49,21 @@ function refreshReprs(state: MemoryState): void {
     if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set' || obj.type === 'defaultdict') {
       obj.repr = formatObject(obj, state);
     }
+    if (obj.type === 'ndarray') {
+      obj.repr = numpyRepr(ndarrayWindow(obj.id, state));
+    }
+  }
+}
+
+/**
+ * Recompute the cached repr of every ndarray window AND its buffer after a
+ * buffer write, so a mutation through one window is visible through every
+ * other window (the whole point of a view).
+ */
+function refreshNdarrayReprs(state: MemoryState): void {
+  for (const obj of Object.values(state.heap)) {
+    if (obj.type === 'ndarray') obj.repr = numpyRepr(ndarrayWindow(obj.id, state));
+    if (obj.type === 'buffer') obj.repr = `[${(obj.value as NumpyBufferValue).data.join(', ')}]`;
   }
 }
 
@@ -160,6 +177,17 @@ function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
     if (obj.type === 'list') {
       (obj.value as RtValue[])[index as number] = value;
       obj.repr = formatObject(obj, state);
+      return;
+    }
+    if (obj.type === 'ndarray') {
+      const v = obj.value as NdarrayValue;
+      const n = Number(value);
+      if (Number.isNaN(n)) throw new Error(`TypeError: cannot assign non-number to ndarray (line 0)`);
+      const i = index as number;
+      const data = (state.heap[v.buffer].value as NumpyBufferValue).data;
+      data[v.offset + i] = n;
+      // A buffer write is seen by every ndarray window over it — refresh them all.
+      refreshNdarrayReprs(state);
       return;
     }
     if (obj.type === 'dict' || obj.type === 'defaultdict') {
@@ -442,6 +470,17 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
     if (method === 'copy') return shallowClone(args[0], state, line);
     if (method === 'deepcopy') return deepClone(args[0], state, line);
     throw new Error(`AttributeError: module 'copy' has no attribute '${method}' (line ${line})`);
+  }
+
+  if (obj.type === 'module' && (obj.value as { name: string }).name === 'numpy') {
+    if (method === 'array') return makeNdarray(args, state, line);
+    throw new Error(`AttributeError: module 'numpy' has no attribute '${method}' (line ${line})`);
+  }
+
+  if (obj.type === 'ndarray') {
+    if (method === 'copy') return copyNdarray(objId as string, state, line);
+    if (method === 'sum') return ndarraySum(objId as string, state, line);
+    throw new Error(`AttributeError: 'ndarray' object has no attribute '${method}' (line ${line})`);
   }
 
   if (obj.type === 'list') {
@@ -850,6 +889,123 @@ function reduce(args: RtValue[], state: MemoryState, line: number): RtValue {
 }
 
 /**
+ * A numpy buffer's payload: a flat run of numbers. Rendered as a separate
+ * box on the canvas so a view-vs-copy distinction becomes visible — the
+ * ndarray points at a buffer, and a copy mints a *second* buffer.
+ */
+interface NumpyBufferValue {
+  data: number[];
+  dtype: string;
+}
+
+/**
+ * An ndarray's payload: a *window* onto a buffer. `buffer` is the id of the
+ * heap buffer box; `offset` + `shape` carve the view's slice out of that
+ * buffer's flat run. `view` is true when this window is not the buffer's full
+ * extent (i.e. it is a slice) and false when it owns its own full buffer.
+ */
+interface NdarrayValue {
+  buffer: string;
+  offset: number;
+  shape: number;
+  dtype: string;
+  view: boolean;
+}
+
+/** numpy-style repr of a number run: `[1. 2. 3.]` (float-ish, trailing dot). */
+function numpyRepr(data: number[]): string {
+  const body = data.map((n) => (Number.isInteger(n) ? `${n}.` : String(n)));
+  return `[${body.join(' ')}]`;
+}
+
+/** The numeric window an ndarray currently shows (offset+shape over buffer). */
+function ndarrayWindow(ndId: string, state: MemoryState): number[] {
+  const v = state.heap[ndId].value as NdarrayValue;
+  const data = (state.heap[v.buffer].value as NumpyBufferValue).data;
+  return data.slice(v.offset, v.offset + v.shape);
+}
+
+/** Allocate a buffer object holding a flat numeric run. */
+function makeBuffer(data: number[], dtype: string, state: MemoryState): string {
+  const obj = allocObject('buffer', { data, dtype } as NumpyBufferValue, `[${data.join(', ')}]`);
+  state.heap[obj.id] = obj;
+  return obj.id;
+}
+
+/**
+ * `np.array([...])` → a fresh buffer + an ndarray that owns its full buffer.
+ */
+function makeNdarray(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length !== 1) throw new Error(`TypeError: array() takes exactly one argument (line ${line})`);
+  const data = readNumberSeries(args[0], state);
+  const bufId = makeBuffer(data, 'float64', state);
+  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype: 'float64', view: false } as NdarrayValue, '');
+  state.heap[obj.id] = obj;
+  obj.repr = numpyRepr(data);
+  return obj.id;
+}
+
+/**
+ * `a.copy()` → a new buffer holding the array's current window. The new
+ * buffer is fully independent: mutating one is invisible to the other.
+ */
+function copyNdarray(ndId: string, state: MemoryState, line: number): RtValue {
+  const nd = state.heap[ndId];
+  if (!nd || nd.type !== 'ndarray') throw new Error(`TypeError: ${typeName(ndId, state)} has no .copy() (line ${line})`);
+  const data = ndarrayWindow(ndId, state);
+  const bufId = makeBuffer([...data], (nd.value as NdarrayValue).dtype, state);
+  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype: 'float64', view: false } as NdarrayValue, '');
+  state.heap[obj.id] = obj;
+  obj.repr = numpyRepr(data);
+  return obj.id;
+}
+
+/**
+ * `a[start:stop]` → a *view*: a new ndarray window onto the SAME buffer. This
+ * is the flagship identity idea — slicing does not copy the data, it makes a
+ * second window onto it. Writing through the view edits the shared buffer.
+ */
+function ndarraySlice(ndId: string, start: RtValue, stop: RtValue, state: MemoryState, line: number): RtValue {
+  const nd = state.heap[ndId];
+  if (!nd || nd.type !== 'ndarray') throw new Error(`TypeError: ${typeName(ndId, state)} is not sliceable (line ${line})`);
+  const v = nd.value as NdarrayValue;
+  const full = (state.heap[v.buffer].value as NumpyBufferValue).data;
+  const s = start === null ? 0 : Number(start);
+  const e = stop === null ? v.shape : Number(stop);
+  const offset = v.offset + s;
+  const shape = Math.max(0, e - s);
+  const obj = allocObject('ndarray', { buffer: v.buffer, offset, shape, dtype: v.dtype, view: true } as NdarrayValue, '');
+  state.heap[obj.id] = obj;
+  obj.repr = numpyRepr(full.slice(offset, offset + shape));
+  void line;
+  return obj.id;
+}
+
+/**
+ * `a + scalar` (vectorized) → a brand-new buffer holding the element-wise
+ * result. The operand is read; a new buffer is minted for the result.
+ */
+function vecAdd(left: RtValue, right: RtValue, state: MemoryState, line: number): RtValue {
+  const a = state.heap[left as string];
+  if (!a || a.type !== 'ndarray') throw new Error(`TypeError: unsupported operand (line ${line})`);
+  const b = Number(right);
+  if (Number.isNaN(b)) throw new Error(`TypeError: cannot add ${typeName(right, state)} to ndarray (line ${line})`);
+  const data = ndarrayWindow(left as string, state).map((n) => n + b);
+  const bufId = makeBuffer(data, 'float64', state);
+  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype: 'float64', view: false } as NdarrayValue, '');
+  state.heap[obj.id] = obj;
+  obj.repr = numpyRepr(data);
+  return obj.id;
+}
+
+/** `a.sum()` → fold the array's window into a scalar. */
+function ndarraySum(ndId: string, state: MemoryState, line: number): RtValue {
+  const nd = state.heap[ndId];
+  if (!nd || nd.type !== 'ndarray') throw new Error(`TypeError: ${typeName(ndId, state)} has no .sum() (line ${line})`);
+  return ndarrayWindow(ndId, state).reduce((acc, n) => acc + n, 0);
+}
+
+/**
  * Python-style string repr using single quotes.
  */
 function formatStr(s: string): string {
@@ -917,6 +1073,7 @@ function lengthOf(v: RtValue, state: MemoryState): number {
     const obj = state.heap[v];
     if (['list', 'tuple', 'set', 'dict'].includes(obj.type)) return (obj.value as unknown[]).length;
     if (obj.type === 'defaultdict') return dictEntries(obj).length;
+    if (obj.type === 'ndarray') return (obj.value as NdarrayValue).shape;
     if (obj.type === 'str') return (obj.value as string).length;
   }
   if (typeof v === 'string') return v.length;
@@ -963,6 +1120,15 @@ function binOp(op: string, left: RtValue, right: RtValue, state: MemoryState, li
   // string concatenation
   const lt = typeName(left, state);
   const rt = typeName(right, state);
+
+  // vectorized ndarray + scalar → a fresh buffer
+  if (op === '+' && (lt === 'ndarray' || rt === 'ndarray')) {
+    const scalar = lt === 'ndarray' ? right : left;
+    const arr = lt === 'ndarray' ? left : right;
+    if (typeof scalar !== 'number') throw new Error(`TypeError: unsupported operand for + (line ${line})`);
+    return vecAdd(arr, scalar, state, line);
+  }
+
   if (op === '+' && lt === 'str' && rt === 'str') {
     const lv = state.heap[left as string].value as string;
     const rv = state.heap[right as string].value as string;
@@ -1049,6 +1215,13 @@ function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: 
     }
     return value[idx];
   }
+  if (obj.type === 'ndarray') {
+    const v = obj.value as NdarrayValue;
+    const i = Number(index);
+    const idx = i < 0 ? v.shape + i : i;
+    if (idx < 0 || idx >= v.shape) throw new Error(`IndexError: index out of range (line ${line})`);
+    return (state.heap[v.buffer].value as NumpyBufferValue).data[v.offset + idx]!;
+  }
   if (obj.type === 'dict' || obj.type === 'defaultdict') {
     const keyRepr = dictKeyRepr(index, state);
     const entries = dictEntries(obj);
@@ -1085,6 +1258,9 @@ function sliceGet(objId: RtValue, start: RtValue, stop: RtValue, state: MemorySt
     state.heap[out.id] = out;
     out.repr = formatObject(out, state);
     return out.id;
+  }
+  if (obj.type === 'ndarray') {
+    return ndarraySlice(objId as string, start, stop, state, line);
   }
   if (obj.type === 'str') {
     return allocString((obj.value as string).slice(s, e), state);

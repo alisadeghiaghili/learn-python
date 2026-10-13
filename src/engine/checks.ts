@@ -233,6 +233,38 @@ export const preds = {
     };
   },
 
+  /** `name` is a numpy ndarray. */
+  isNdarray(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const view = slotView(name, snapshot);
+      return view?.type === 'ndarray' ? true : `'${name}' is not an ndarray.`;
+    };
+  },
+
+  /**
+   * Two ndarrays point at the SAME buffer (a view shares its source's buffer).
+   */
+  sharesBuffer(name: string, other: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const a = ndarrayBufferId(name, snapshot);
+      const b = ndarrayBufferId(other, snapshot);
+      if (a === null || b === null) return `Bind both '${name}' and '${other}' as ndarrays.`;
+      return a === b;
+    };
+  },
+
+  /**
+   * Two ndarrays point at DIFFERENT buffers (an independent copy).
+   */
+  independentBuffer(name: string, other: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const a = ndarrayBufferId(name, snapshot);
+      const b = ndarrayBufferId(other, snapshot);
+      if (a === null || b === null) return `Bind both '${name}' and '${other}' as ndarrays.`;
+      return a !== b;
+    };
+  },
+
   /**
    * A plot has been drawn (optionally of a specific kind).
    */
@@ -302,6 +334,18 @@ export const preds = {
     };
   },
 };
+
+/** Read an ndarray's normalized `buffer` id from the snapshot, or null. */
+function ndarrayBufferId(name: string, snapshot: Snapshot): string | null {
+  const module = snapshot.frames[snapshot.frames.length - 1];
+  if (!module) return null;
+  const id = module.locals[name];
+  if (typeof id !== 'string' || !snapshot.heap[id]) return null;
+  const obj = snapshot.heap[id];
+  if (obj.type !== 'ndarray') return null;
+  const v = obj.value as { buffer?: unknown };
+  return typeof v.buffer === 'string' ? v.buffer : null;
+}
 
 /** Read an iterator's `{ source, index }` from the normalized snapshot. */
 function iteratorValue(name: string, snapshot: Snapshot): { source: string; index: number } | null {

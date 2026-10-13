@@ -2,8 +2,8 @@
  * SVG memory visualizer: stack frames (left) and heap objects (right).
  */
 
-import type { GoalPreview, MemoryState, RtValue } from '../engine/types';
-import { isDefaultDictValue, isIteratorValue, isMapFilterValue, type RefEdge } from '../engine/memory';
+import type { MemoryState, RtValue } from '../engine/types';
+import { isDefaultDictValue, isIteratorValue, isMapFilterValue, isNdarrayValue, type RefEdge } from '../engine/memory';
 
 const COLORS = {
   bg: 'transparent',
@@ -124,6 +124,8 @@ function valueKind(targetId: RtValue, state: MemoryState): string {
 
 function containerRefs(obj: { type: string; value: unknown }): string[] {
   const { type, value } = obj;
+  // ndarray → the buffer it views
+  if (isNdarrayValue(value)) return [value.buffer];
   if (type === 'list' || type === 'tuple' || type === 'set') {
     return (value as RtValue[]).filter((v): v is string => typeof v === 'string' && v.startsWith('obj_'));
   }
@@ -140,6 +142,8 @@ function containerRefs(obj: { type: string; value: unknown }): string[] {
 
 function objectHeight(obj: { type: string; value: unknown }): number {
   const { type, value } = obj;
+  // ndarray carries a tag line (dtype/shape/view) under the value — taller box.
+  if (type === 'ndarray') return 62;
   if (type === 'list' || type === 'tuple' || type === 'set') {
     return 36 + Math.max((value as unknown[]).length, 1) * OBJ_ROW_H;
   }
@@ -223,6 +227,14 @@ function drawObject(svg: SVGSVGElement, x: number, y: number, w: number, h: numb
       const label = `${k}: ${cellLabel(v, obj, i)}`;
       addText(g, x + 14, y + 42 + i * OBJ_ROW_H, label, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
     });
+  } else if (obj.type === 'ndarray' && isNdarrayValue(obj.value)) {
+    // ndarray: the value it shows, plus a tag line pointing at its buffer
+    const ndv = obj.value as { dtype: string; shape: number; view: boolean; buffer: string };
+    addText(g, x + 14, y + 30, obj.repr, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
+    addText(g, x + 14, y + 48, `${ndv.dtype}[${ndv.shape}] · ${ndv.view ? 'view' : 'own'} → ${ndv.buffer}`, COLORS.amber, 10, 'start', 'middle', 'IBM Plex Mono, monospace');
+  } else if (obj.type === 'buffer') {
+    // buffer: the flat run of numbers an ndarray window views
+    addText(g, x + 14, y + 32, obj.repr, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else if (isMapFilterValue(obj.value)) {
     // map/filter: show the function it applies and the source iterator it draws from
     addText(g, x + 14, y + 32, `${obj.type === 'filteriter' ? '⚲' : 'ƒ'} ${obj.value.fn} · src ${obj.value.source}`, COLORS.ink, 11, 'start', 'middle', 'IBM Plex Mono, monospace');
@@ -299,37 +311,3 @@ function addText(parent: SVGElement, x: number, y: number, text: string, fill: s
   parent.appendChild(t);
 }
 
-/**
- * HTML target preview for the level brief (paper card).
- */
-export function renderGoalHtml(goalPreview: GoalPreview | null): string {
-  if (!goalPreview) return '';
-  const entries = Object.entries(goalPreview.vars || {});
-  const aliasMap = new Map<string, string>();
-  for (const [a, b] of goalPreview.aliased || []) {
-    if (!aliasMap.has(a)) aliasMap.set(a, b);
-  }
-  const rows = entries
-    .map(([name, spec]) => {
-      const alias = aliasMap.has(name)
-        ? `<span class="tg-alias">≡ ${escapeHtml(aliasMap.get(name)!)}</span>`
-        : '';
-      return (
-        `<div class="tg-row">` +
-        `<span class="tg-name">${escapeHtml(name)}</span>` +
-        `<span class="tg-type">${escapeHtml(spec.type || '')}</span>` +
-        `<span class="tg-repr">${escapeHtml(spec.repr ?? '')}</span>` +
-        `${alias}</div>`
-      );
-    })
-    .join('');
-  return rows || '<div class="tg-row"><span class="tg-type">match goal</span></div>';
-}
-
-function escapeHtml(s: string): string {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
