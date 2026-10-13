@@ -225,6 +225,33 @@ body {
   text-decoration: none;
 }
 
+.tb-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--line));
+  background: color-mix(in srgb, var(--panel-2) 65%, transparent);
+  color: color-mix(in srgb, var(--text) 90%, var(--amber));
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.tb-stat .visitor-icon {
+  color: var(--amber);
+  flex-shrink: 0;
+}
+
+.tb-stat[hidden] {
+  display: none !important;
+}
+
 .tb-link.support {
   color: #ffe6b0;
   border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
