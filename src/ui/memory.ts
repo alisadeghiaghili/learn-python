@@ -3,7 +3,7 @@
  */
 
 import type { MemoryState, RtValue } from '../engine/types';
-import { isCoroutineValue, isDefaultDictValue, isEventLoopValue, isIteratorValue, isMapFilterValue, isNdarrayValue, isPandasValue, isTaskValue, type RefEdge } from '../engine/memory';
+import { isCoroutineValue, isDefaultDictValue, isEventLoopValue, isIteratorValue, isLockValue, isMapFilterValue, isNdarrayValue, isPandasValue, isTaskValue, isThreadValue, type RefEdge } from '../engine/memory';
 
 const COLORS = {
   bg: 'transparent',
@@ -134,6 +134,18 @@ function asyncStatusColor(status: string): string {
   return COLORS.muted; // pending
 }
 
+/**
+ * Color a thread's lifecycle status: running is hot (amber), blocked on a lock
+ * is a pause (coral), done is settled (teal), and a not-yet-started thread is
+ * muted. Mirrors the asyncio palette so the two concurrency lenses read alike.
+ */
+function threadStatusColor(status: string): string {
+  if (status === 'running') return COLORS.amber;
+  if (status === 'blocked') return COLORS.coral;
+  if (status === 'done') return COLORS.teal;
+  return COLORS.muted; // not-started
+}
+
 function containerRefs(obj: { type: string; value: unknown }): string[] {
   const { type, value } = obj;
   // ndarray → the buffer it views
@@ -163,6 +175,16 @@ function containerRefs(obj: { type: string; value: unknown }): string[] {
   if (isTaskValue(value)) return [value.coro];
   // event loop → every task in its ready queue and done list
   if (isEventLoopValue(value)) return [...value.ready, ...value.done];
+  // thread → the target function it runs (and any heap objects in its locals)
+  if (isThreadValue(value)) {
+    const refs = [value.target];
+    for (const v of Object.values(value.locals)) {
+      if (typeof v === 'string' && v.startsWith('obj_')) refs.push(v);
+    }
+    return refs;
+  }
+  // a held lock → the thread that holds it
+  if (isLockValue(value)) return value.holder ? [value.holder] : [];
   return [];
 }
 
@@ -303,6 +325,15 @@ function drawObject(svg: SVGSVGElement, x: number, y: number, w: number, h: numb
     const l = obj.value as { tick: number; running: boolean; ready: string[]; done: string[] };
     addText(g, x + 14, y + 24, `EventLoop · tick ${l.tick}`, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
     addText(g, x + 14, y + 42, `running ${l.running ? '●' : '○'} · ${l.ready.length} ready / ${l.done.length} done`, l.running ? COLORS.amber : COLORS.muted, 10, 'start', 'middle', 'IBM Plex Mono, monospace');
+  } else if (obj.type === 'thread' && isThreadValue(obj.value)) {
+    // a thread: the target it runs and its lifecycle status, plus the saved pc
+    const t = obj.value as { name: string; status: string; pc: number };
+    addText(g, x + 14, y + 32, `Thread ${t.name}`, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
+    addText(g, x + w - 10, y + 32, `${t.status} · pc ${t.pc}`, threadStatusColor(t.status), 10, 'end', 'middle', 'IBM Plex Mono, monospace');
+  } else if (obj.type === 'lock' && isLockValue(obj.value)) {
+    // a lock: HELD (with who) or free — the mutual-exclusion switch
+    const l = obj.value as { held: boolean; holder: string | null };
+    addText(g, x + 14, y + 32, l.held ? `🔒 HELD · ${l.holder}` : `🔓 free`, l.held ? COLORS.coral : COLORS.teal, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else if (obj.type === 'str') {
     addText(g, x + 14, y + 32, obj.repr, COLORS.ink, 13, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else {

@@ -554,6 +554,24 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
     throw new Error(`AttributeError: module 'asyncio' has no attribute '${method}' (line ${line})`);
   }
 
+  if (obj.type === 'module' && (obj.value as { name: string }).name === 'threading') {
+    if (method === 'Thread') return makeThread(args, state, line);
+    if (method === 'Lock') return makeLock(state, line);
+    throw new Error(`AttributeError: module 'threading' has no attribute '${method}' (line ${line})`);
+  }
+
+  if (obj.type === 'thread') {
+    if (method === 'start') { threadStart(objId as string, state, line); return null; }
+    if (method === 'join') { threadJoin(objId as string, state, line); return null; }
+    throw new Error(`AttributeError: 'thread' object has no attribute '${method}' (line ${line})`);
+  }
+
+  if (obj.type === 'lock') {
+    if (method === 'acquire') return lockAcquire(objId as string, state, line);
+    if (method === 'release') return lockRelease(objId as string, state, line);
+    throw new Error(`AttributeError: 'lock' object has no attribute '${method}' (line ${line})`);
+  }
+
   if (obj.type === 'ndarray') {
     if (method === 'copy') return copyNdarray(objId as string, state, line);
     if (method === 'sum') return ndarraySum(objId as string, state, line);
@@ -1317,6 +1335,247 @@ function runEventLoop(args: RtValue[], state: MemoryState, line: number): void {
 function ensureTaskId(v: RtValue, state: MemoryState, line: number): string {
   if (typeof v === 'string' && state.heap[v]?.type === 'task') return v;
   throw new Error(`TypeError: run() takes tasks, got ${typeName(v, state)} (line ${line})`);
+}
+
+/* ————————————————— threading (concurrency exemplar) —————————————————
+ *
+ * A thread is a call running in its own frame that SHARES the module heap. The
+ * faithful difference from asyncio: a thread is preempted after EVERY statement,
+ * not just at an await. `join` is the scheduler — it round-robins the started
+ * threads one statement at a time, so two threads visibly interleave on the
+ * shared memory. A lock's acquire() on a held lock suspends the caller until the
+ * holder release()s — mutual exclusion that makes an interleaved read-modify-write
+ * (the classic lost-update race) safe.
+ */
+
+type ThreadStatus = 'not-started' | 'running' | 'blocked' | 'done';
+
+interface ThreadValue {
+  target: string; // the function code object id this thread runs
+  name: string;
+  status: ThreadStatus;
+  pc: number;
+  body: AstNode[];
+  locals: Record<string, unknown>;
+  returnValue: RtValue;
+  blocked: boolean; // true while suspended on a held lock
+}
+
+interface LockValue {
+  held: boolean;
+  holder: string | null; // the thread id holding it, null when free
+}
+
+/**
+ * The id of the thread currently being stepped by `threadJoin`, or null. Lets
+ * `lockAcquire`/`lockRelease` know which thread is running (is the lock already
+ * held by THIS thread?) and who to record as holder. The engine is
+ * single-threaded, so a module pointer is safe — exactly how `activeCoroutineId`
+ * works for asyncio.
+ */
+let activeThreadId: string | null = null;
+
+function threadRepr(type: string, v: unknown): string {
+  if (type === 'thread') {
+    const t = v as ThreadValue;
+    return `Thread-${t.name} · ${t.status}`;
+  }
+  const l = v as LockValue;
+  return `Lock · ${l.held ? 'HELD' : 'free'}`;
+}
+
+/**
+ * `t.Thread(target, args_tuple)` — make a thread that runs `target` with the
+ * `args_tuple` elements as its parameters. It starts in **not-started**: the
+ * target has not run yet. The parser has no keyword args, so `target` and the
+ * `args` tuple are positional (`t.Thread(bump, (box,))`).
+ */
+function makeThread(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length < 1 || args.length > 2) {
+    throw new Error(`TypeError: Thread() takes (target[, args_tuple]) (line ${line})`);
+  }
+  const fnId = args[0];
+  const fn = typeof fnId === 'string' ? state.heap[fnId] : undefined;
+  if (!fn || fn.type !== 'function') {
+    throw new Error(`TypeError: Thread() target must be a function, got ${typeName(fnId, state)} (line ${line})`);
+  }
+  const code = fn.value as FunctionCode;
+  const params = code.params;
+  // Args come as a tuple (or list); its elements bind to the target's params.
+  let callArgs: RtValue[] = [];
+  if (args.length === 2) {
+    const tup = typeof args[1] === 'string' ? state.heap[args[1] as string] : undefined;
+    if (tup && ['tuple', 'list'].includes(tup.type)) {
+      callArgs = [...(tup.value as RtValue[])];
+    }
+  }
+  if (callArgs.length !== params.length) {
+    throw new Error(`TypeError: Thread() target ${code.name}() takes ${params.length} arg(s), got ${callArgs.length} (line ${line})`);
+  }
+  const locals: Record<string, unknown> = {};
+  params.forEach((p, i) => (locals[p] = callArgs[i]));
+  const v: ThreadValue = {
+    target: fnId as string,
+    name: code.name,
+    status: 'not-started',
+    pc: 0,
+    body: code.body,
+    locals,
+    returnValue: null,
+    blocked: false,
+  };
+  const obj = allocObject('thread', v, threadRepr('thread', v));
+  state.heap[obj.id] = obj;
+  return obj.id;
+}
+
+/** `t.Lock()` → a free lock. */
+function makeLock(state: MemoryState, line: number): RtValue {
+  void line;
+  const v: LockValue = { held: false, holder: null };
+  const obj = allocObject('lock', v, threadRepr('lock', v));
+  state.heap[obj.id] = obj;
+  return obj.id;
+}
+
+/** `thread.start()` — the thread becomes running (it runs under `join`). */
+function threadStart(objId: string, state: MemoryState, line: number): void {
+  const th = state.heap[objId].value as ThreadValue;
+  if (th.status === 'running' || th.status === 'blocked') {
+    throw new Error(`RuntimeError: cannot start thread ${th.name} (already started) (line ${line})`);
+  }
+  th.status = 'running';
+  th.pc = 0;
+  refreshThreadReprs(state);
+}
+
+/**
+ * `lock.acquire()` — take the lock. Free (or already held by THIS thread) takes
+ * immediately; held by ANOTHER thread suspends the caller (PySuspend) so it is
+ * retried next round until the holder releases. Acquiring never advances `pc` —
+ * a suspended thread re-runs `acquire()` on its next turn, which is what makes
+ * blocking different from asyncio's one-shot `await`.
+ */
+function lockAcquire(objId: string, state: MemoryState, line: number): RtValue {
+  void line;
+  const lk = state.heap[objId].value as LockValue;
+  if (lk.held && lk.holder !== activeThreadId) {
+    throw new PySuspend();
+  }
+  lk.held = true;
+  lk.holder = activeThreadId;
+  refreshThreadReprs(state);
+  return null;
+}
+
+/** `lock.release()` — free the lock. Only the holder (or a free lock) may. */
+function lockRelease(objId: string, state: MemoryState, line: number): RtValue {
+  const lk = state.heap[objId].value as LockValue;
+  if (lk.held && lk.holder !== activeThreadId) {
+    throw new Error(`RuntimeError: cannot release lock (not held by this thread) (line ${line})`);
+  }
+  lk.held = false;
+  lk.holder = null;
+  refreshThreadReprs(state);
+  return null;
+}
+
+/**
+ * `thread.join()` — the scheduler. Every started (running or blocked) thread is
+ * driven in a round-robin, ONE statement at a time, until they all finish. This
+ * preemption is what makes threads race: a thread reads box[0], then the other
+ * thread reads it too, THEN both write — so a write can be lost. A thread that
+ * blocks on a held lock is suspended and retried the next round. A full round
+ * with zero real progress is a deadlock (circular lock wait); we stop it rather
+ * than hang, leaving the threads visibly blocked.
+ */
+function threadJoin(objId: string, state: MemoryState, line: number): void {
+  const self = state.heap[objId];
+  if (!self || self.type !== 'thread') {
+    throw new Error(`TypeError: join() called on a non-thread (line ${line})`);
+  }
+  const selfTh = self.value as ThreadValue;
+  if (selfTh.status === 'not-started') threadStart(objId, state, line);
+
+  const active = Object.values(state.heap).filter((o) => o.type === 'thread');
+  let stalledRounds = 0;
+  for (;;) {
+    const live = active.filter((t) => {
+      const tv = t.value as ThreadValue;
+      return tv.status === 'running' || tv.status === 'blocked';
+    });
+    if (live.length === 0) break;
+    let progressed = false;
+    for (const t of live) {
+      const tv = t.value as ThreadValue;
+      if (tv.status === 'blocked') { tv.blocked = false; tv.status = 'running'; }
+      if (tv.pc >= tv.body.length) { tv.status = 'done'; progressed = true; continue; }
+      const before = tv.pc;
+      stepThread(t.id, state);
+      // A re-block (pc unchanged, back to blocked) is no real progress — the
+      // signal of a circular-wait deadlock.
+      if (tv.status === 'done' || tv.pc > before) progressed = true;
+    }
+    refreshThreadReprs(state);
+    if (!progressed) {
+      if (++stalledRounds > 10000) break; // deadlock: leave them blocked
+      continue;
+    }
+    stalledRounds = 0;
+  }
+  refreshThreadReprs(state);
+}
+
+/**
+ * Step one thread by exactly ONE statement (not to its next suspension). This is
+ * the preemption that lets threads interleave: read box[0], THEN hand off, THEN
+ * write. Locals are saved back onto the thread across the yield; a lock-suspension
+ * leaves `pc` on the `acquire()` so it retries.
+ */
+function stepThread(threadId: string, state: MemoryState): void {
+  const th = state.heap[threadId].value as ThreadValue;
+  if (th.pc >= th.body.length) { th.status = 'done'; return; }
+  const frame: Frame = { name: `thread:${th.name}`, locals: {} };
+  for (const [k, v] of Object.entries(th.locals)) frame.locals[k] = v as RtValue;
+  state.frames.push(frame);
+  activeThreadId = threadId;
+  try {
+    try {
+      execStatement(th.body[th.pc]!, state);
+    } catch (err) {
+      if (err instanceof PySuspend) {
+        // Blocking on a held lock: stay on the acquire() (pc NOT advanced) and
+        // mark the thread blocked; the next round retries it.
+        th.blocked = true;
+        th.status = 'blocked';
+        return;
+      }
+      if (err instanceof PyReturn) {
+        th.returnValue = err.value;
+        th.pc = th.body.length;
+        th.status = 'done';
+        return;
+      }
+      throw err;
+    }
+    th.pc += 1;
+    if (th.pc >= th.body.length) th.status = 'done';
+  } finally {
+    for (const [k, v] of Object.entries(frame.locals)) th.locals[k] = v;
+    state.frames.pop();
+    activeThreadId = null;
+    refreshThreadReprs(state);
+    refreshReprs(state);
+  }
+}
+
+/** Recompute the repr of every thread (status) and lock (held/free). */
+function refreshThreadReprs(state: MemoryState): void {
+  for (const obj of Object.values(state.heap)) {
+    if (obj.type === 'thread' || obj.type === 'lock') {
+      obj.repr = threadRepr(obj.type, obj.value);
+    }
+  }
 }
 
 /* ————————————————— pandas (Phase 2) —————————————————
