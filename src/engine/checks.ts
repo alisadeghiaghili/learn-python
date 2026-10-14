@@ -385,7 +385,62 @@ export const preds = {
       return itv.index >= len;
     };
   },
+
+  /** `name` is a coroutine (the object an `async def` call returns). */
+  isCoroutine(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const view = slotView(name, snapshot);
+      return view?.type === 'coroutine' ? true : `'${name}' is not a coroutine — call an async def.`;
+    };
+  },
+
+  /** `name` is a Task (a named handle to a coroutine). */
+  isTask(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const view = slotView(name, snapshot);
+      return view?.type === 'task' ? true : `'${name}' is not a task — wrap a coroutine with asyncio.create_task().`;
+    };
+  },
+
+  /** `name` (a task) is currently in `status`. */
+  taskStatus(name: string, status: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const t = asyncTaskValue(name, snapshot);
+      if (!t) return `Bind '${name}' as a task first.`;
+      return t.status === status ? true : `Task '${name}' is ${t.status}, expected ${status}.`;
+    };
+  },
+
+  /** The event loop advanced at least `n` ticks (the tasks actually interleaved). */
+  loopRan(n: number) {
+    return (_snapshot: Snapshot, runtime: MemoryState): boolean | string => {
+      return runtime.ticks >= n ? true : `The event loop ran ${runtime.ticks} tick(s), expected at least ${n}.`;
+    };
+  },
+
+  /** Two tasks wrap *different* coroutines (independent units of work). */
+  differentTasks(a: string, b: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const ta = asyncTaskValue(a, snapshot);
+      const tb = asyncTaskValue(b, snapshot);
+      if (!ta || !tb) return `Bind both '${a}' and '${b}' as tasks.`;
+      return ta.coro !== tb.coro ? true : `'${a}' and '${b}' wrap the same coroutine.`;
+    };
+  },
 };
+
+/** Read a task's normalized `{ coro, name, status }` from the snapshot, or null. */
+function asyncTaskValue(name: string, snapshot: Snapshot): { coro: string; name: string; status: string } | null {
+  const module = snapshot.frames[snapshot.frames.length - 1];
+  if (!module) return null;
+  const id = module.locals[name];
+  if (typeof id !== 'string' || !snapshot.heap[id]) return null;
+  const obj = snapshot.heap[id];
+  if (obj.type !== 'task') return null;
+  const v = obj.value as { coro?: unknown; name?: unknown; status?: unknown };
+  if (typeof v.coro !== 'string' || typeof v.status !== 'string') return null;
+  return { coro: v.coro, name: typeof v.name === 'string' ? v.name : '', status: v.status };
+}
 
 /** Read a pandas Series/DataFrame's normalized `buffer` id from the snapshot. */
 function pandasBufferId(name: string, snapshot: Snapshot): string | null {

@@ -64,6 +64,15 @@ function estimateByteSize(type: string, value: unknown): number {
     }
     case 'function':
       return HEADER + 8 + 8 + 8;
+    case 'coroutine':
+      // fn ptr + status + program counter + (locals grow with it)
+      return HEADER + 8 + 8 + 8;
+    case 'task':
+      return HEADER + 8 + 8;
+    case 'eventloop': {
+      const v = value as { ready?: unknown[]; done?: unknown[] };
+      return HEADER + 8 + 8 + 8 * (v.ready?.length ?? 0) + 8 * (v.done?.length ?? 0);
+    }
     default:
       return HEADER + 8;
   }
@@ -175,6 +184,42 @@ export function isPandasValue(value: unknown): value is { buffer: string } {
   return hasSeries || hasFrame;
 }
 
+/**
+ * A coroutine's payload: `{ fn, status, pc, locals }` — a suspended call. `fn`
+ * is the coroutine-function code object id. Detected by its `fn` ref plus the
+ * two markers every coroutine carries (`status` + `pc`); this is what keeps a
+ * coroutine distinct from a bare function.
+ */
+export function isCoroutineValue(value: unknown): value is { fn: string; name: string; status: string; pc: number; locals: Record<string, unknown> } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { fn?: unknown; name?: unknown; status?: unknown; pc?: unknown };
+  return typeof v.fn === 'string' && v.fn.startsWith('obj_')
+    && typeof v.name === 'string' && typeof v.status === 'string' && typeof v.pc === 'number';
+}
+
+/**
+ * A task's payload: `{ coro, name, status }` — a named handle to a coroutine.
+ * Detected by its `coro` ref plus the `name` + `status` markers, so it is never
+ * confused with a coroutine (which has `pc`) or a coroutine-function.
+ */
+export function isTaskValue(value: unknown): value is { coro: string; name: string; status: string } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { coro?: unknown; name?: unknown; status?: unknown };
+  return typeof v.coro === 'string' && v.coro.startsWith('obj_')
+    && typeof v.name === 'string' && typeof v.status === 'string';
+}
+
+/**
+ * An event-loop's payload: `{ running, ready, done, tick }` — the queue of
+ * ready tasks (ids) it round-robins, plus a tick counter. Detected by its
+ * `ready`/`done` id arrays and `tick` counter.
+ */
+export function isEventLoopValue(value: unknown): value is { running: boolean; ready: string[]; done: string[]; tick: number } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { ready?: unknown; done?: unknown; tick?: unknown };
+  return Array.isArray(v.ready) && Array.isArray(v.done) && typeof v.tick === 'number';
+}
+
 export interface RefEdge {
   fromFrame: string;
   name: string;
@@ -251,6 +296,19 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
   // A map/filter iterator holds a ref to the source iterator AND the function
   // it applies — keep both alive and let the canvas draw both edges.
   if (isMapFilterValue(value)) return [value.source, value.fn];
+  // A coroutine holds a ref to the coroutine-function code object it was made
+  // from; its `locals` may point at heap objects (keep those alive too).
+  if (isCoroutineValue(value)) {
+    const refs = [value.fn];
+    for (const v of Object.values(value.locals)) {
+      if (typeof v === 'string' && v.startsWith('obj_')) refs.push(v);
+    }
+    return refs;
+  }
+  // A task holds a ref to the coroutine it wraps.
+  if (isTaskValue(value)) return [value.coro];
+  // An event loop holds refs to every task in its ready queue and done list.
+  if (isEventLoopValue(value)) return [...value.ready, ...value.done];
   // An iterator holds a reference to the iterable it walks — keep that source
   // alive and let the canvas draw the iterator → source edge.
   if (isIteratorValue(value)) return [value.source];
@@ -338,6 +396,24 @@ function normalizeValue(
     const entries = value.entries.map(([k, v]) => [k, normalizeValue(v, idMap, heap, firstPass)] as [string, unknown]);
     return { factory: value.factory, entries };
   }
+  // A coroutine's value holds a `fn` id + a `locals` map of ids — remap both so
+  // structural compare matches across runs.
+  if (isCoroutineValue(value)) {
+    const locals: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value.locals)) {
+      locals[k] = typeof v === 'string' && v.startsWith('obj_') && heap[v] ? idMap[v] : v;
+    }
+    return { ...value, fn: idMap[value.fn] ?? value.fn, locals };
+  }
+  // A task's value holds a `coro` id — remap it.
+  if (isTaskValue(value)) {
+    return { ...value, coro: idMap[value.coro] ?? value.coro };
+  }
+  // An event loop's value holds `ready`/`done` task-id arrays — remap them.
+  if (isEventLoopValue(value)) {
+    const remap = (ids: string[]) => ids.map((i) => (heap[i] ? idMap[i] : i));
+    return { ...value, ready: remap(value.ready), done: remap(value.done) };
+  }
   return value;
 }
 
@@ -351,5 +427,6 @@ export function createModuleState(): MemoryState {
     stdout: [],
     errors: [],
     plots: [],
+    ticks: 0,
   };
 }

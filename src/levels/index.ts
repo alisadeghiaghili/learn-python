@@ -13,6 +13,7 @@ import { series as iterators } from './iterators';
 import { series as functional } from './functional';
 import { series as numpy } from './numpy';
 import { series as pandas } from './pandas';
+import { series as asyncio } from './asyncio';
 import { series as mutation } from './mutation';
 import { series as functions } from './functions';
 import { series as plotting } from './plotting';
@@ -27,6 +28,7 @@ export const sequences: Sequence[] = [
   ...functional,
   ...numpy,
   ...pandas,
+  ...asyncio,
   ...mutation,
   ...functions,
   ...plotting,

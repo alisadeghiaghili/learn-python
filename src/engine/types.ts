@@ -16,6 +16,8 @@ export interface FunctionCode {
   name: string;
   params: string[];
   body: AstNode[];
+  /** True for an `async def`; calling it returns a coroutine instead of running. */
+  async?: boolean;
 }
 
 /** The memory segment an object lives in (for the RAM view). */
@@ -64,6 +66,12 @@ export interface MemoryState {
   stdout: string[];
   errors: string[];
   plots: PlotSpec[];
+  /**
+   * Total event-loop ticks executed (`a.run(...)` advances the loop one task per
+   * tick). The abstract model stays layout-free; this is a small scalar the
+   * asyncio goals read to prove the loop actually interleaved.
+   */
+  ticks: number;
 }
 
 /* —— Tokens —— */
@@ -194,6 +202,18 @@ export interface FunctionDefNode extends BaseNode {
   params: string[];
   body: AstNode[];
 }
+/** An `async def` — a coroutine function; calling it returns a coroutine. */
+export interface CoroutineDefNode extends BaseNode {
+  kind: 'CoroutineDef';
+  name: string;
+  params: string[];
+  body: AstNode[];
+}
+/** `await x` — a suspension point inside a coroutine (yields the tick to the loop). */
+export interface AwaitNode extends BaseNode {
+  kind: 'Await';
+  value: AstNode;
+}
 export interface PassNode extends BaseNode {
   kind: 'Pass';
 }
@@ -225,6 +245,8 @@ export type AstNode =
   | ExprStatementNode
   | ReturnNode
   | FunctionDefNode
+  | CoroutineDefNode
+  | AwaitNode
   | PassNode
   | ImportNode;
 

@@ -61,6 +61,13 @@ class Parser {
   private parseStatement(): AstNode {
     const tok = this.peek();
     if (!tok) throw new Error('SyntaxError: unexpected end of input');
+    if (tok.type === 'KEYWORD' && tok.value === 'async') {
+      const next = this.tokens[this.pos + 1];
+      if (!next || next.type !== 'KEYWORD' || next.value !== 'def') {
+        throw new Error('SyntaxError: only "async def" is supported (line ' + tok.line + ')');
+      }
+      return this.parseCoroutineDef();
+    }
     if (tok.type === 'KEYWORD' && tok.value === 'def') {
       return this.parseFunctionDef();
     }
@@ -138,6 +145,31 @@ class Parser {
     }
     this.expect('DEDENT');
     return { kind: 'FunctionDef', name, params, body, line: tok.line };
+  }
+
+  /** `async def name(params):` — a coroutine function definition. */
+  private parseCoroutineDef(): AstNode {
+    const tok = this.expect('KEYWORD', 'async');
+    this.expect('KEYWORD', 'def');
+    const name = this.expect('NAME').value;
+    this.expect('OP', '(');
+    const params: string[] = [];
+    if (!(this.peek() && this.peek().type === 'OP' && this.peek().value === ')')) {
+      params.push(this.expect('NAME').value);
+      while (this.eatOp(',')) params.push(this.expect('NAME').value);
+    }
+    this.expect('OP', ')');
+    this.eatOp(':');
+    this.expect('NEWLINE');
+    this.expect('INDENT');
+    const body: AstNode[] = [];
+    while (this.peek() && this.peek().type !== 'DEDENT' && this.peek().type !== 'END') {
+      while (this.peek() && this.peek().type === 'NEWLINE') this.next();
+      if (!this.peek() || this.peek().type === 'DEDENT' || this.peek().type === 'END') break;
+      body.push(this.parseStatement());
+    }
+    this.expect('DEDENT');
+    return { kind: 'CoroutineDef', name, params, body, line: tok.line };
   }
 
   /** `import x`, `import x.y`, or `import x as z`. (from-imports are v1.) */
@@ -268,6 +300,11 @@ class Parser {
       const tok = this.next();
       const operand = this.parseUnary();
       return { kind: 'UnaryOp', op: tok.value, operand, line: tok.line };
+    }
+    if (this.peek()?.type === 'KEYWORD' && this.peek().value === 'await') {
+      const tok = this.next();
+      const value = this.parseUnary();
+      return { kind: 'Await', value, line: tok.line };
     }
     return this.parsePostfix();
   }

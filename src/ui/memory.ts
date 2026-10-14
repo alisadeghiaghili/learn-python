@@ -3,7 +3,7 @@
  */
 
 import type { MemoryState, RtValue } from '../engine/types';
-import { isDefaultDictValue, isIteratorValue, isMapFilterValue, isNdarrayValue, isPandasValue, type RefEdge } from '../engine/memory';
+import { isCoroutineValue, isDefaultDictValue, isEventLoopValue, isIteratorValue, isMapFilterValue, isNdarrayValue, isPandasValue, isTaskValue, type RefEdge } from '../engine/memory';
 
 const COLORS = {
   bg: 'transparent',
@@ -122,6 +122,18 @@ function valueKind(targetId: RtValue, state: MemoryState): string {
   return 'value';
 }
 
+/**
+ * Color a coroutine/task lifecycle status so the state machine reads at a
+ * glance: ready is hot (amber), suspended is a pause (coral), done is settled
+ * (teal), and a not-yet-started coroutine is muted.
+ */
+function asyncStatusColor(status: string): string {
+  if (status === 'ready') return COLORS.amber;
+  if (status === 'suspended') return COLORS.coral;
+  if (status === 'done') return COLORS.teal;
+  return COLORS.muted; // pending
+}
+
 function containerRefs(obj: { type: string; value: unknown }): string[] {
   const { type, value } = obj;
   // ndarray → the buffer it views
@@ -139,6 +151,18 @@ function containerRefs(obj: { type: string; value: unknown }): string[] {
   if (isMapFilterValue(value)) return [value.source, value.fn];
   // iterator → the iterable it walks
   if (isIteratorValue(value)) return [value.source];
+  // coroutine → its coroutine-function code object (and any heap locals)
+  if (isCoroutineValue(value)) {
+    const refs = [value.fn];
+    for (const v of Object.values(value.locals)) {
+      if (typeof v === 'string' && v.startsWith('obj_')) refs.push(v);
+    }
+    return refs;
+  }
+  // task → the coroutine it wraps
+  if (isTaskValue(value)) return [value.coro];
+  // event loop → every task in its ready queue and done list
+  if (isEventLoopValue(value)) return [...value.ready, ...value.done];
   return [];
 }
 
@@ -158,6 +182,8 @@ function objectHeight(obj: { type: string; value: unknown; repr?: string }): num
     const entries = isDefaultDictValue(value) ? value.entries : [];
     return 36 + Math.max(entries.length, 1) * OBJ_ROW_H;
   }
+  // an event loop shows a header line + a ready/done queue line — two lines tall
+  if (type === 'eventloop') return 58;
   return 44;
 }
 
@@ -262,6 +288,21 @@ function drawObject(svg: SVGSVGElement, x: number, y: number, w: number, h: numb
   } else if (isIteratorValue(obj.value)) {
     // iterator: show its target and current cursor
     addText(g, x + 14, y + 32, `→ ${obj.value.source} · i=${obj.value.index}`, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
+  } else if (obj.type === 'coroutine' && isCoroutineValue(obj.value)) {
+    // a coroutine: the suspended function, its status, and its saved place (pc)
+    const c = obj.value as { name: string; status: string; pc: number };
+    addText(g, x + 14, y + 32, `coro ${c.name}()`, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
+    addText(g, x + w - 10, y + 32, `${c.status} · pc ${c.pc}`, asyncStatusColor(c.status), 10, 'end', 'middle', 'IBM Plex Mono, monospace');
+  } else if (obj.type === 'task' && isTaskValue(obj.value)) {
+    // a task: a named handle to a coroutine, with its lifecycle status
+    const t = obj.value as { name: string; status: string };
+    addText(g, x + 14, y + 32, `Task ${t.name}`, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
+    addText(g, x + w - 10, y + 32, t.status, asyncStatusColor(t.status), 10, 'end', 'middle', 'IBM Plex Mono, monospace');
+  } else if (obj.type === 'eventloop' && isEventLoopValue(obj.value)) {
+    // the event loop: its tick count and the ready/done queues it round-robins
+    const l = obj.value as { tick: number; running: boolean; ready: string[]; done: string[] };
+    addText(g, x + 14, y + 24, `EventLoop · tick ${l.tick}`, COLORS.ink, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
+    addText(g, x + 14, y + 42, `running ${l.running ? '●' : '○'} · ${l.ready.length} ready / ${l.done.length} done`, l.running ? COLORS.amber : COLORS.muted, 10, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else if (obj.type === 'str') {
     addText(g, x + 14, y + 32, obj.repr, COLORS.ink, 13, 'start', 'middle', 'IBM Plex Mono, monospace');
   } else {
