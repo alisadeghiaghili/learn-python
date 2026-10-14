@@ -162,7 +162,7 @@ export class App {
             <button type="button" class="nav-toggle" data-action="nav-toggle" aria-label="Menu" aria-expanded="false" aria-controls="nav-drawer">
               <span class="nav-bars" aria-hidden="true"></span>
             </button>
-            <div class="nav-drawer" id="nav-drawer">
+            <div class="nav-drawer" id="nav-drawer" hidden>
               <button type="button" data-action="levels">Levels</button>
               <button type="button" data-action="lesson">Lesson</button>
               <button type="button" data-action="goal">Guide</button>
@@ -260,24 +260,17 @@ export class App {
     const drawer = this.root.querySelector<HTMLElement>('#nav-drawer');
     const btn = this.root.querySelector<HTMLButtonElement>('[data-action="nav-toggle"]');
     if (!drawer || !btn) return;
-    const open = drawer.hasAttribute('hidden');
-    if (open) {
-      drawer.removeAttribute('hidden');
-      drawer.classList.add('is-open');
-      btn.setAttribute('aria-expanded', 'true');
-    } else {
-      drawer.setAttribute('hidden', '');
-      drawer.classList.remove('is-open');
-      btn.setAttribute('aria-expanded', 'false');
-    }
+    const open = drawer.classList.toggle('is-open');
+    drawer.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
   }
 
   private closeNav(): void {
     const drawer = this.root.querySelector<HTMLElement>('#nav-drawer');
     const btn = this.root.querySelector<HTMLButtonElement>('[data-action="nav-toggle"]');
     if (!drawer || !btn) return;
-    drawer.setAttribute('hidden', '');
     drawer.classList.remove('is-open');
+    drawer.hidden = true;
     btn.setAttribute('aria-expanded', 'false');
   }
 
