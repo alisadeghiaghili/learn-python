@@ -427,6 +427,73 @@ export const preds = {
       return ta.coro !== tb.coro ? true : `'${a}' and '${b}' wrap the same coroutine.`;
     };
   },
+
+  /** `name` is a thread (the object `threading.Thread(...)` returns). */
+  isThread(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const view = slotView(name, snapshot);
+      return view?.type === 'thread' ? true : `'${name}' is not a thread — build one with threading.Thread(target, args).`;
+    };
+  },
+
+  /** `name` (a thread) is currently in `status` (not-started / running / blocked / done). */
+  threadStatus(name: string, status: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const t = threadValue(name, snapshot);
+      if (!t) return `Bind '${name}' as a thread first.`;
+      return t.status === status ? true : `Thread '${name}' is ${t.status}, expected ${status}.`;
+    };
+  },
+
+  /** Two threads run *different* targets (independent units of work). */
+  differentThreads(a: string, b: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const ta = threadValue(a, snapshot);
+      const tb = threadValue(b, snapshot);
+      if (!ta || !tb) return `Bind both '${a}' and '${b}' as threads.`;
+      return ta.target !== tb.target ? true : `'${a}' and '${b}' run the same target.`;
+    };
+  },
+
+  /** `name` is a lock (the object `threading.Lock()` returns). */
+  isLock(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const view = slotView(name, snapshot);
+      return view?.type === 'lock' ? true : `'${name}' is not a lock — build one with threading.Lock().`;
+    };
+  },
+
+  /** `name` (a lock) is currently held. */
+  lockHeld(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const l = lockValue(name, snapshot);
+      if (!l) return `Bind '${name}' as a lock first.`;
+      return l.held ? true : `Lock '${name}' is free, expected HELD.`;
+    };
+  },
+
+  /** `name` (a lock) is currently free. */
+  lockFree(name: string) {
+    return (snapshot: Snapshot, _runtime: MemoryState): boolean | string => {
+      const l = lockValue(name, snapshot);
+      if (!l) return `Bind '${name}' as a lock first.`;
+      return l.held ? `Lock '${name}' is HELD, expected free.` : true;
+    };
+  },
+
+  /** `name[index]` holds the number `value` — the read a race is about. */
+  listValueAt(name: string, index: number, value: number) {
+    return (snapshot: Snapshot): boolean | string => {
+      const module = snapshot.frames[snapshot.frames.length - 1];
+      const id = module.locals[name];
+      if (typeof id !== 'string' || !snapshot.heap[id]) return `Bind '${name}' first.`;
+      const obj = snapshot.heap[id];
+      const arr = obj.value as unknown[];
+      if (!Array.isArray(arr)) return `'${name}' is not a list.`;
+      const cell = arr[index];
+      return Number(cell) === value ? true : `'${name}[${index}]' is ${cell}, expected ${value}.`;
+    };
+  },
 };
 
 /** Read a task's normalized `{ coro, name, status }` from the snapshot, or null. */
@@ -440,6 +507,32 @@ function asyncTaskValue(name: string, snapshot: Snapshot): { coro: string; name:
   const v = obj.value as { coro?: unknown; name?: unknown; status?: unknown };
   if (typeof v.coro !== 'string' || typeof v.status !== 'string') return null;
   return { coro: v.coro, name: typeof v.name === 'string' ? v.name : '', status: v.status };
+}
+
+/** Read a thread's normalized `{ target, name, status }` from the snapshot, or null. */
+function threadValue(name: string, snapshot: Snapshot): { target: string; name: string; status: string } | null {
+  const module = snapshot.frames[snapshot.frames.length - 1];
+  if (!module) return null;
+  const id = module.locals[name];
+  if (typeof id !== 'string' || !snapshot.heap[id]) return null;
+  const obj = snapshot.heap[id];
+  if (obj.type !== 'thread') return null;
+  const v = obj.value as { target?: unknown; name?: unknown; status?: unknown };
+  if (typeof v.target !== 'string' || typeof v.status !== 'string') return null;
+  return { target: v.target, name: typeof v.name === 'string' ? v.name : '', status: v.status };
+}
+
+/** Read a lock's normalized `{ held, holder }` from the snapshot, or null. */
+function lockValue(name: string, snapshot: Snapshot): { held: boolean; holder: string | null } | null {
+  const module = snapshot.frames[snapshot.frames.length - 1];
+  if (!module) return null;
+  const id = module.locals[name];
+  if (typeof id !== 'string' || !snapshot.heap[id]) return null;
+  const obj = snapshot.heap[id];
+  if (obj.type !== 'lock') return null;
+  const v = obj.value as { held?: unknown; holder?: unknown };
+  if (typeof v.held !== 'boolean') return null;
+  return { held: v.held, holder: v.holder === null ? null : (typeof v.holder === 'string' ? v.holder : null) };
 }
 
 /** Read a pandas Series/DataFrame's normalized `buffer` id from the snapshot. */

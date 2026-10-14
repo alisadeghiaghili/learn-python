@@ -200,7 +200,7 @@ step. The numpy and pandas series are the two worked references.
 
 ## 3. The catalog (current)
 
-**45 levels across 11 series.** Series are in teaching order. `band` is the
+**55 levels across 13 series.** Series are in teaching order. `band` is the
 level's ELI band.
 
 | Series | Title | Levels |
@@ -213,6 +213,8 @@ level's ELI band.
 | `functional` | Defaults & Functional | 4 |
 | `numpy` | NumPy: Buffers & Views | 5 |
 | `pandas` | Pandas: Tables as windows over a buffer | 5 |
+| `asyncio` | Asyncio: Coroutines, Tasks & the Event Loop | 5 |
+| `threading` | Threading: Threads, Shared State & the Data Race | 5 |
 | `mutation` | Mutation & Methods | 4 |
 | `functions` | Functions & Frames | 4 |
 | `plotting` | Plotting & Capstone | 3 |
@@ -321,6 +323,38 @@ level's ELI band.
 | `pd-iloc-view` | eli20 | A row-slice is a view |
 | `pd-copy-independent` | eliphd | Capstone: view vs copy |
 
+### Concurrency
+
+**`asyncio` — Asyncio: Coroutines, Tasks & the Event Loop** (the concurrency exemplar)
+
+| id | band | name |
+|----|------|------|
+| `as-make-coro` | eli10 | Call an async def |
+| `as-create-task` | eli15 | Wrap a coroutine in a task |
+| `as-run-one` | eli15 | Run the loop (one task) |
+| `as-await-yields` | eli20 | await yields the tick |
+| `as-produce-consume` | eliphd | Capstone: producer & consumer |
+
+**`threading` — Threading: Threads, Shared State & the Data Race** (the preemption exemplar)
+
+| id | band | name |
+|----|------|------|
+| `th-make-thread` | eli10 | Build a thread |
+| `th-start-join` | eli15 | Start and join one thread |
+| `th-race` | eli20 | Two threads, one box: the lost update |
+| `th-lock` | eliphd | Fix the race with a lock |
+| `th-critical-capstone` | eliphd | Capstone: block, wait, and proceed in order |
+
+The threading series is the memory-lens answer to "what is a data race?" A
+thread is a call running in its own frame that **shares the module heap** and is
+preempted **after every statement** (not just at a `yield`, the way a coroutine
+is). `join` is the scheduler that round-robins the started threads one statement
+at a time, so two threads touching the same box visibly interleave on it. `box[0]
+= box[0] + 1` written as two statements (`v = box[0]` then `box[0] = v + 1`)
+interleaves into a **lost update**: both read 0, both write 1, the box ends at 1
+not 2. Wrapping the read-modify-write in `lock.acquire()`/`release()` serializes
+it (a held lock **blocks** the caller until release), and the box ends at 2.
+
 ---
 
 ## 4. The lesson spec
@@ -376,10 +410,10 @@ The deep lesson ramps from "a grid of beads" (ELI5) to "copy-on-write, and why
 a view can mutate its source" (ELI-PHD), with the *DataFrame window over one
 buffer* schematic in the ELI5 section.
 
-### 4.4 Worked exemplar — **asyncio** (design; on the roadmap)
+### 4.4 Worked exemplar — **asyncio** (shipped)
 
-Concurrency is the second named exemplar. It is not built yet; this is the
-worked *design*, so it is ready to implement the same way numpy/pandas were.
+Concurrency is the second named exemplar. It is built (the `asyncio` series);
+the design below matches the implementation.
 
 **Thesis:** a coroutine is an object; `await` is *suspension*, not blocking; the
 event loop is a **tick-based scheduler** that advances ready tasks one step at a
@@ -411,11 +445,11 @@ then the next), `producer-consumer` (a queue box between two tasks), and
 
 | level (id) | band | task | goal |
 |------------|------|------|------|
-| `as-make-coro` | eli10 | `task = a.create_task(coro)` — a task is an object | `isTask('task')` |
-| `as-two-tasks` | eli15 | two tasks on the loop | both `ready` in the loop's queue |
-| `as-await-yields` | eli20 | one `await` yields the tick to the other task | the other task advanced (status/pc) |
-| `as-interleave` | eli20 | watch two tasks interleave over ticks | the loop's `tick` advanced, both progressed |
-| `as-produce-consume` | eliphd | capstone: producer/consumer through a queue | the queue drains; both tasks `done` |
+| `as-make-coro` | eli10 | `c = greet()` — calling an async def returns a coroutine | `isCoroutine('c')` |
+| `as-create-task` | eli15 | `t = a.create_task(c)` — a task is a named handle | `isTask('t')` |
+| `as-run-one` | eli15 | `a.run(t)` — the loop drives one task to done | `taskStatus('t','done')`, `loopRan(1)` |
+| `as-await-yields` | eli20 | `a.run(t1, t2)` — an `await` yields the tick to the other | both `done`; the interleaved stdout |
+| `as-produce-consume` | eliphd | capstone: producer/consumer through a shared list | both `done`; the consumer saw the write |
 
 **Deep-lesson ramp:** ELI5 = "two people taking turns at one stove" (the loop is
 the stove); ELI10 = a task is a saved place in a function, `await` sets the place
@@ -442,13 +476,15 @@ teal = a buffer/data box, muted = a note).
 | 6 | iterator protocol | `iter` → `next`, the cursor | reusable |
 | 7 | refcount graph | who keeps an object alive | reusable |
 | 8 | buffer + overlapping views | two windows, one run | reusable (numpy/pandas) |
-| 9 | event-loop tick | the loop handing a tick back and forth | for `asyncio` |
-| 10 | producer–consumer | a queue box between two tasks | for `asyncio` |
-| 11 | lock / critical section | two tasks, one lock | for `threading` |
+| 9 | event-loop tick | the loop handing a tick back and forth | ✅ (`asyncio` deep lesson) |
+| 10 | producer–consumer | a queue box between two tasks | for `asyncio` depth |
+| 11 | lock / critical section | one gate: a thread holds it, the other waits | ✅ (`threading` deep lesson) |
 | 12 | DataFrame structure | columns as virtual slices of a row-major buffer | for `pandas` depth |
 | 13 | DOM tree | parent → child heap edges | for `beautifulsoup` |
 | 14 | regex groups | pattern → match → group chips | for `re` |
 | 15 | pickle freeze / restore | a frozen graph, restored with the same aliasing | for `pickle` |
+| 16 | **lost update (data race)** | two threads read-modify-write one box; a write is clobbered | ✅ (`threading` deep lesson) |
+| 17 | **thread / lock states** | not-started → running ⇄ blocked → done; HELD ⇄ free | reusable (concurrency) |
 
 When you add a series, add its archetype(s) here with a one-line "teaches" so the
 diagram library stays a map, not a graveyard.
@@ -473,7 +509,9 @@ the whole reason we prioritize.
 | 5 | re, datetime, pytz | a compiled pattern; identity = value | `Pattern`/`Match`, `Datetime`/`TZ` | #14 | ★★ |
 | 6 | requests | a Response box → body → `.json()` dict | `Response` | (response chain) | ★ |
 | 7 | SQLAlchemy, pyodbc | a Model/Session; a Connection → row boxes | `Model`/`Session`, `Connection`/`Cursor` | (1-to-many links) | ★★ |
-| 8 | **asyncio**, threading/multiprocessing | a coroutine; the tick loop; a lock | `coroutine`/`task`/`eventloop` (or `Thread`) | #9, #10, #11 | ★★★ |
+| 8 | **asyncio** ✅ | a coroutine; the tick loop | `coroutine`/`task`/`eventloop` | #9 | ★★★ |
+| 8 | **threading** ✅ | a call in its own frame sharing the heap, preempted per statement; a lock serializes a critical section | `thread`/`lock` | #11, #16 | ★★★ |
+| 8 | multiprocessing | a process is a *separate* heap (no sharing) | `Process` | (fork picture) | ★★ |
 | 9 | matplotlib, plotly | a Figure/Axes **is an object**, not magic | `Figure`/`Axes`, `Figure` | (artist chips) | ★ |
 | 10 | capstones | multi-library assembly | (composes) | (mix) | — |
 

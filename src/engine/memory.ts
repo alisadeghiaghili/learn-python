@@ -73,6 +73,12 @@ function estimateByteSize(type: string, value: unknown): number {
       const v = value as { ready?: unknown[]; done?: unknown[] };
       return HEADER + 8 + 8 + 8 * (v.ready?.length ?? 0) + 8 * (v.done?.length ?? 0);
     }
+    case 'thread':
+      // target ref + status + program counter (locals grow with it)
+      return HEADER + 8 + 8 + 8;
+    case 'lock':
+      // held flag + the thread id that holds it (absent when free)
+      return HEADER + 8 + 8;
     default:
       return HEADER + 8;
   }
@@ -220,6 +226,30 @@ export function isEventLoopValue(value: unknown): value is { running: boolean; r
   return Array.isArray(v.ready) && Array.isArray(v.done) && typeof v.tick === 'number';
 }
 
+/**
+ * A thread's payload: `{ target, name, status, pc, locals, returnValue }` — a
+ * call running in its own frame that shares the module heap. Detected by its
+ * `target` function id plus the `name` + `pc` + `status` markers (a coroutine
+ * has `fn`/`status`/`pc` instead, so `target` is what keeps them apart).
+ */
+export function isThreadValue(value: unknown): value is { target: string; name: string; status: string; pc: number; locals: Record<string, unknown>; returnValue: unknown } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { target?: unknown; name?: unknown; status?: unknown; pc?: unknown };
+  return typeof v.target === 'string' && v.target.startsWith('obj_')
+    && typeof v.name === 'string' && typeof v.status === 'string' && typeof v.pc === 'number';
+}
+
+/**
+ * A lock's payload: `{ held, holder }` — `holder` is the thread id that holds it
+ * (null when free). Detected by its `held` boolean flag.
+ */
+export function isLockValue(value: unknown): value is { held: boolean; holder: string | null } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as { held?: unknown; holder?: unknown };
+  return typeof v.held === 'boolean'
+    && (v.holder === null || (typeof v.holder === 'string' && v.holder.startsWith('obj_')));
+}
+
 export interface RefEdge {
   fromFrame: string;
   name: string;
@@ -309,6 +339,17 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
   if (isTaskValue(value)) return [value.coro];
   // An event loop holds refs to every task in its ready queue and done list.
   if (isEventLoopValue(value)) return [...value.ready, ...value.done];
+  // A thread holds a ref to the target function it runs (keep it alive and draw
+  // the thread → target edge); its saved `locals` may point at heap objects too.
+  if (isThreadValue(value)) {
+    const refs = [value.target];
+    for (const v of Object.values(value.locals)) {
+      if (typeof v === 'string' && v.startsWith('obj_')) refs.push(v);
+    }
+    return refs;
+  }
+  // A held lock points at the thread that holds it (a live reference).
+  if (isLockValue(value)) return value.holder ? [value.holder] : [];
   // An iterator holds a reference to the iterable it walks — keep that source
   // alive and let the canvas draw the iterator → source edge.
   if (isIteratorValue(value)) return [value.source];
@@ -413,6 +454,18 @@ function normalizeValue(
   if (isEventLoopValue(value)) {
     const remap = (ids: string[]) => ids.map((i) => (heap[i] ? idMap[i] : i));
     return { ...value, ready: remap(value.ready), done: remap(value.done) };
+  }
+  // A thread's value holds a `target` id + a `locals` map of ids — remap both.
+  if (isThreadValue(value)) {
+    const locals: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value.locals)) {
+      locals[k] = typeof v === 'string' && v.startsWith('obj_') && heap[v] ? idMap[v] : v;
+    }
+    return { ...value, target: idMap[value.target] ?? value.target, locals };
+  }
+  // A lock's value holds a `holder` thread id — remap it (null when free).
+  if (isLockValue(value)) {
+    return { ...value, holder: value.holder && heap[value.holder] ? idMap[value.holder] : value.holder };
   }
   return value;
 }

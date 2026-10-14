@@ -650,3 +650,141 @@ describe('asyncio (concurrency exemplar)', () => {
     expect(preds.taskStatus('tx', 'done')(snapshot(state), state)).not.toBe(true);
   });
 });
+
+describe('threading (concurrency exemplar)', () => {
+  test('a threading.Thread builds a not-started thread (target has not run)', () => {
+    const state = runFresh(
+      [
+        'import threading as t',
+        'def bump(box):',
+        '    v = box[0]',
+        '    box[0] = v + 1',
+        'box = [0]',
+        'w = t.Thread(bump, (box,))',
+      ].join('\n'),
+    );
+    const o = state.heap[state.frames[0].locals.w as string];
+    expect(o.type).toBe('thread');
+    const tv = o.value as { name: string; status: string };
+    expect(tv.name).toBe('bump');
+    expect(tv.status).toBe('not-started');
+    // the target did NOT run — box is still [0]
+    expect(state.stdout).toEqual([]);
+    expect(preds.isThread('w')(snapshot(state), state)).toBe(true);
+    expect(preds.threadStatus('w', 'not-started')(snapshot(state), state)).toBe(true);
+  });
+
+  test('join runs one thread to completion, mutating the shared box', () => {
+    const state = runFresh(
+      [
+        'import threading as t',
+        'def bump(box):',
+        '    v = box[0]',
+        '    box[0] = v + 1',
+        'box = [0]',
+        'w = t.Thread(bump, (box,))',
+        'w.start()',
+        'w.join()',
+      ].join('\n'),
+    );
+    // one thread did its read-modify-write once → box is [1]
+    expect(preds.listValueAt('box', 0, 1)(snapshot(state))).toBe(true);
+    expect(preds.threadStatus('w', 'done')(snapshot(state), state)).toBe(true);
+  });
+
+  test('two threads interleave on shared state → lost update (box ends at 1, not 2)', () => {
+    const state = runFresh(
+      [
+        'import threading as t',
+        'def bump(box):',
+        '    v = box[0]',
+        '    box[0] = v + 1',
+        'box = [0]',
+        't1 = t.Thread(bump, (box,))',
+        't2 = t.Thread(bump, (box,))',
+        't1.start()',
+        't2.start()',
+        't1.join()',
+      ].join('\n'),
+    );
+    // Both read box[0]=0 before either wrote: the second write clobbers the first.
+    // The counter ends at 1 — a data race (lost update) — not the expected 2.
+    expect(preds.listValueAt('box', 0, 1)(snapshot(state))).toBe(true);
+    expect(preds.threadStatus('t1', 'done')(snapshot(state), state)).toBe(true);
+    expect(preds.threadStatus('t2', 'done')(snapshot(state), state)).toBe(true);
+  });
+
+  test('wrapping the critical section in a lock fixes the race (box ends at 2)', () => {
+    const state = runFresh(
+      [
+        'import threading as t',
+        'def bump(box, lk):',
+        '    lk.acquire()',
+        '    v = box[0]',
+        '    box[0] = v + 1',
+        '    lk.release()',
+        'box = [0]',
+        'lk = t.Lock()',
+        't1 = t.Thread(bump, (box, lk))',
+        't2 = t.Thread(bump, (box, lk))',
+        't1.start()',
+        't2.start()',
+        't1.join()',
+      ].join('\n'),
+    );
+    // Mutual exclusion serializes the read-modify-write → no lost update.
+    expect(preds.listValueAt('box', 0, 2)(snapshot(state))).toBe(true);
+    expect(preds.threadStatus('t1', 'done')(snapshot(state), state)).toBe(true);
+    expect(preds.threadStatus('t2', 'done')(snapshot(state), state)).toBe(true);
+    // back to free once every thread has released
+    expect(preds.lockFree('lk')(snapshot(state), state)).toBe(true);
+  });
+
+  test('a held lock blocks the caller (suspends, retries on the next round)', () => {
+    const state = runFresh(
+      [
+        'import threading as t',
+        'def hold(lk):',
+        '    lk.acquire()',
+        '    print("A holds")',
+        '    lk.release()',
+        'def wait_then(lk):',
+        '    lk.acquire()',
+        '    print("B proceeds")',
+        '    lk.release()',
+        'lk = t.Lock()',
+        'ta = t.Thread(hold, (lk,))',
+        'tb = t.Thread(wait_then, (lk,))',
+        'ta.start()',
+        'tb.start()',
+        'ta.join()',
+      ].join('\n'),
+    );
+    // B could only print AFTER A released the lock → the output is ordered
+    expect(state.stdout).toEqual(['A holds', 'B proceeds']);
+    expect(preds.lockFree('lk')(snapshot(state), state)).toBe(true);
+  });
+
+  test('threading predicates: isThread, differentThreads, threadStatus, isLock', () => {
+    const state = runFresh(
+      [
+        'import threading as t',
+        'def x(box):',
+        '    v = box[0]',
+        '    box[0] = v + 1',
+        'def y(box):',
+        '    print("y")',
+        'box = [0]',
+        'tx = t.Thread(x, (box,))',
+        'ty = t.Thread(y, (box,))',
+        'lk = t.Lock()',
+      ].join('\n'),
+    );
+    expect(preds.isThread('tx')(snapshot(state), state)).toBe(true);
+    expect(preds.isThread('ty')(snapshot(state), state)).toBe(true);
+    expect(preds.differentThreads('tx', 'ty')(snapshot(state), state)).toBe(true);
+    expect(preds.threadStatus('tx', 'not-started')(snapshot(state), state)).toBe(true);
+    expect(preds.isLock('lk')(snapshot(state), state)).toBe(true);
+    expect(preds.lockFree('lk')(snapshot(state), state)).toBe(true);
+  });
+});
