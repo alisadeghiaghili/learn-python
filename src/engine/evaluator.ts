@@ -112,6 +112,18 @@ function execStatement(node: AstNode, state: MemoryState): void {
       state.heap[fn.id] = fn;
       return;
     }
+    case 'CoroutineDef': {
+      // An `async def` binds a coroutine-function code object (async: true).
+      const fn = allocObject('function', {
+        name: node.name,
+        params: [...node.params],
+        body: node.body,
+        async: true,
+      } as FunctionCode, `async function ${node.name}`);
+      setFrameLocal(currentFrame(state), node.name, fn.id);
+      state.heap[fn.id] = fn;
+      return;
+    }
     case 'Import': {
       const mod = allocObject('module', { name: node.name }, `<module '${node.name}'>`);
       state.heap[mod.id] = mod;
@@ -133,6 +145,25 @@ class PyReturn extends Error {
     this.value = value;
   }
 }
+
+/**
+ * Raised by `await a.sleep(...)` inside a coroutine to hand the tick back to the
+ * event loop (a cooperative-yield suspension point). The coroutine executor
+ * catches it, saves the suspended state, and resumes on the next tick.
+ */
+class PySuspend extends Error {
+  constructor() {
+    super('suspend');
+  }
+}
+
+/**
+ * The id of the coroutine currently being stepped by the event loop, or null.
+ * Lets `evalExpr` on an `Await` know whether a suspension is in force (inside a
+ * coroutine) or a plain no-op (a bare `await` outside a running task). The
+ * engine is single-threaded, so a module pointer is safe.
+ */
+let activeCoroutineId: string | null = null;
 
 function currentFrame(state: MemoryState): Frame {
   return state.frames[state.frames.length - 1];
@@ -314,6 +345,15 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
     case 'Call': {
       return evalCall(node, state);
     }
+    case 'Await': {
+      // `await a.sleep(...)` inside a running coroutine is a suspension point:
+      // it hands the tick back to the event loop (a cooperative yield). Outside a
+      // running coroutine it is a no-op that just evaluates its operand.
+      if (activeCoroutineId) {
+        throw new PySuspend();
+      }
+      return evalExpr(node.value, state);
+    }
     default:
       throw new Error(`RuntimeError: unsupported expression ${node.kind}`);
   }
@@ -435,11 +475,16 @@ function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, li
   if (!fn || fn.type !== 'function') {
     throw new Error(`TypeError: object is not callable (line ${line})`);
   }
-  const { name, params, body } = fn.value as FunctionCode;
+  const { name, params, body, async: isAsync } = fn.value as FunctionCode;
   if (args.length !== params.length) {
     throw new Error(
       `TypeError: ${name}() takes ${params.length} positional argument(s) but ${args.length} were given (line ${line})`,
     );
+  }
+  // Calling a coroutine function does NOT run it — it returns a suspended
+  // coroutine object (the whole point of async: the body runs later, on ticks).
+  if (isAsync) {
+    return makeCoroutine(name, params, body, args, fnId as string, state);
   }
   const frame: Frame = { name, locals: {} };
   params.forEach((p, i) => {
@@ -496,6 +541,17 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
     if (method === 'DataFrame') return makeDataFrame(args, state, line);
     if (method === 'read_csv') return readCsv(args, state, line);
     throw new Error(`AttributeError: module 'pandas' has no attribute '${method}' (line ${line})`);
+  }
+
+  if (obj.type === 'module' && (obj.value as { name: string }).name === 'asyncio') {
+    if (method === 'create_task') return makeTask(args, state, line);
+    if (method === 'gather') return gather(args, state, line);
+    if (method === 'sleep') return asyncSleep(args, state, line);
+    if (method === 'run') {
+      runEventLoop(args, state, line);
+      return null;
+    }
+    throw new Error(`AttributeError: module 'asyncio' has no attribute '${method}' (line ${line})`);
   }
 
   if (obj.type === 'ndarray') {
@@ -1032,6 +1088,235 @@ function ndarraySum(ndId: string, state: MemoryState, line: number): RtValue {
   const nd = state.heap[ndId];
   if (!nd || nd.type !== 'ndarray') throw new Error(`TypeError: ${typeName(ndId, state)} has no .sum() (line ${line})`);
   return ndarrayWindow(ndId, state).reduce((acc, n) => acc + n, 0);
+}
+
+/* ————————————————— asyncio (concurrency exemplar) —————————————————
+ *
+ * A coroutine is an object that holds a function's state across `await` points;
+ * a Task is a named handle to one; the event loop is a tick-based scheduler that
+ * round-robins ready tasks — each tick advances one task to its next `await`,
+ * then moves on. There is no real loop or wall clock (the fidelity boundary):
+ * the *schedule* is simulated so two coroutines visibly interleave.
+ */
+
+type AsyncStatus = 'pending' | 'ready' | 'suspended' | 'done';
+
+interface CoroutineValue {
+  fn: string;
+  status: AsyncStatus;
+  pc: number;
+  name: string;
+  params: string[];
+  body: AstNode[];
+  locals: Record<string, unknown>;
+  returnValue: RtValue;
+}
+
+interface TaskValue {
+  coro: string;
+  name: string;
+  status: AsyncStatus;
+}
+
+interface EventLoopValue {
+  running: boolean;
+  ready: string[];
+  done: string[];
+  tick: number;
+}
+
+function asyncRepr(type: string, v: unknown, state: MemoryState): string {
+  if (type === 'coroutine') {
+    const c = v as CoroutineValue;
+    return `coro ${c.name}() · ${c.status}`;
+  }
+  if (type === 'task') {
+    const t = v as TaskValue;
+    return `Task(${t.name}) · ${t.status}`;
+  }
+  const l = v as EventLoopValue;
+  const readyNames = l.ready.map((id) => (state.heap[id]?.value as TaskValue | undefined)?.name ?? '?').join(', ');
+  const doneNames = l.done.map((id) => (state.heap[id]?.value as TaskValue | undefined)?.name ?? '?').join(', ');
+  return `EventLoop · tick ${l.tick} · running ${l.running ? 'True' : 'False'} · [ready ${readyNames || '∅'} | done ${doneNames || '∅'}]`;
+}
+
+/**
+ * Bind a coroutine function's call to a *suspended* coroutine object. Its
+ * `locals` are seeded with the parameters; `pc` starts at 0 and the body has not
+ * yet run — it only runs when the event loop ticks it.
+ */
+function makeCoroutine(
+  name: string,
+  params: string[],
+  body: AstNode[],
+  args: RtValue[],
+  fnId: string,
+  state: MemoryState,
+): string {
+  const locals: Record<string, unknown> = {};
+  params.forEach((p, i) => (locals[p] = args[i]));
+  const v: CoroutineValue = {
+    fn: fnId,
+    status: 'pending',
+    pc: 0,
+    name,
+    params: [...params],
+    body,
+    locals,
+    returnValue: null,
+  };
+  const obj = allocObject('coroutine', v, asyncRepr('coroutine', v, state));
+  state.heap[obj.id] = obj;
+  return obj.id;
+}
+
+/** `a.create_task(coro)` → a Task wrapping the given coroutine (initially ready). */
+function makeTask(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length !== 1) throw new Error(`TypeError: create_task() takes one argument (a coroutine) (line ${line})`);
+  const coroId = args[0];
+  if (typeof coroId !== 'string' || state.heap[coroId]?.type !== 'coroutine') {
+    throw new Error(`TypeError: create_task() takes a coroutine, got ${typeName(coroId, state)} (line ${line})`);
+  }
+  const coro = state.heap[coroId].value as CoroutineValue;
+  const v: TaskValue = { coro: coroId, name: coro.name, status: coro.status === 'done' ? 'done' : 'ready' };
+  const obj = allocObject('task', v, asyncRepr('task', v, state));
+  state.heap[obj.id] = obj;
+  return obj.id;
+}
+
+/** `a.sleep(secs)` → a no-op builtin; the waiting is the surrounding `await`. */
+function asyncSleep(args: RtValue[], state: MemoryState, line: number): RtValue {
+  void state; // sleep is a no-op builtin — the waiting is the surrounding `await`
+  if (args.length !== 1) throw new Error(`TypeError: sleep() takes one argument (line ${line})`);
+  const secs = Number(args[0]);
+  if (Number.isNaN(secs)) throw new Error(`TypeError: sleep() takes a number (line ${line})`);
+  return null;
+}
+
+/** `a.gather(t1, t2, ...)` → a list of the task results (eager, for display). */
+function gather(args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (args.length < 1) throw new Error(`TypeError: gather() takes at least one awaitable (line ${line})`);
+  const results: RtValue[] = args.map((a) => taskReturnValue(a, state, line));
+  const obj = allocObject('list', results, '');
+  state.heap[obj.id] = obj;
+  obj.repr = formatObject(obj, state);
+  return obj.id;
+}
+
+/** The value a finished task's coroutine returned (None if not done yet). */
+function taskReturnValue(v: RtValue, state: MemoryState, line: number): RtValue {
+  if (typeof v !== 'string' || state.heap[v]?.type !== 'task') {
+    throw new Error(`TypeError: gather() takes tasks, got ${typeName(v, state)} (line ${line})`);
+  }
+  const t = state.heap[v].value as TaskValue;
+  const coro = state.heap[t.coro];
+  if (!coro || coro.type !== 'coroutine') throw new Error(`RuntimeError: task coroutine was released (line ${line})`);
+  const cv = coro.value as CoroutineValue;
+  return cv.status === 'done' ? cv.returnValue : null;
+}
+
+/**
+ * Advance one coroutine by exactly one tick: run statements from its `pc` until
+ * it suspends on a cooperative `await` (handing the tick back to the loop) or it
+ * returns. The suspended frame's locals are saved back onto the coroutine object
+ * so the next tick resumes where it left off — a coroutine is a function that
+ * remembers its place.
+ */
+function stepCoroutine(state: MemoryState): void {
+  const coroId = activeCoroutineId!;
+  const c = state.heap[coroId].value as CoroutineValue;
+  const frame: Frame = { name: c.name, locals: {} };
+  for (const [k, v] of Object.entries(c.locals)) frame.locals[k] = v as RtValue;
+  state.frames.push(frame);
+  try {
+    while (c.pc < c.body.length) {
+      try {
+        execStatement(c.body[c.pc]!, state);
+      } catch (err) {
+        if (err instanceof PySuspend) {
+          // Cooperative yield: move past the `await` statement so the next tick
+          // resumes after it, not by re-running it.
+          c.pc += 1;
+          c.status = 'suspended';
+          return;
+        }
+        if (err instanceof PyReturn) {
+          c.returnValue = err.value;
+          c.pc = c.body.length;
+          c.status = 'done';
+          return;
+        }
+        throw err;
+      }
+      c.pc += 1;
+    }
+    c.returnValue = null;
+    c.status = 'done';
+  } finally {
+    for (const [k, v] of Object.entries(frame.locals)) c.locals[k] = v;
+    state.frames.pop();
+    refreshAsyncReprs(state);
+  }
+}
+
+/** Recompute the repr of every async object (status / queue change each tick). */
+function refreshAsyncReprs(state: MemoryState): void {
+  for (const obj of Object.values(state.heap)) {
+    if (obj.type === 'coroutine' || obj.type === 'task' || obj.type === 'eventloop') {
+      obj.repr = asyncRepr(obj.type, obj.value, state);
+    }
+  }
+}
+
+/**
+ * `a.run(t1, t2, ...)` — the event loop. It builds a loop object whose ready
+ * queue holds the tasks, then steps them round-robin, one task per tick, until
+ * all are done. Each tick is one unit of interleaving; the round-robined stdout
+ * is the visible proof the tasks ran cooperatively (A, B, A, B, …), not one
+ * after the other.
+ */
+function runEventLoop(args: RtValue[], state: MemoryState, line: number): void {
+  if (args.length < 1) throw new Error(`TypeError: run() takes at least one task (line ${line})`);
+  const taskIds = args.map((a) => ensureTaskId(a, state, line));
+  const ready = taskIds.filter((id) => (state.heap[id].value as TaskValue).status !== 'done');
+  const done = taskIds.filter((id) => (state.heap[id].value as TaskValue).status === 'done');
+  const loop: EventLoopValue = { running: true, ready, done, tick: 0 };
+  const loopObj = allocObject('eventloop', loop, asyncRepr('eventloop', loop, state));
+  state.heap[loopObj.id] = loopObj;
+
+  let guard = 0;
+  while (loop.ready.length > 0) {
+    const taskId = loop.ready.shift()!;
+    const task = state.heap[taskId];
+    if (!task || task.type !== 'task') {
+      loop.ready = [];
+      break;
+    }
+    const tv = task.value as TaskValue;
+    activeCoroutineId = tv.coro; // this step runs inside the task's coroutine
+    stepCoroutine(state);
+    activeCoroutineId = null;
+    loop.tick += 1;
+    state.ticks += 1;
+    const nowDone = (state.heap[tv.coro].value as CoroutineValue).status === 'done';
+    tv.status = nowDone ? 'done' : 'ready';
+    if (nowDone) loop.done.push(taskId);
+    else loop.ready.push(taskId);
+    // Refresh all async reprs after the state/queue update so the boxes agree.
+    refreshAsyncReprs(state);
+    if (guard++ > 10000) {
+      loop.running = false;
+      break;
+    }
+  }
+  loop.running = false;
+  refreshAsyncReprs(state);
+}
+
+/** Resolve a run() argument to a task object id (rejects lists / non-tasks). */
+function ensureTaskId(v: RtValue, state: MemoryState, line: number): string {
+  if (typeof v === 'string' && state.heap[v]?.type === 'task') return v;
+  throw new Error(`TypeError: run() takes tasks, got ${typeName(v, state)} (line ${line})`);
 }
 
 /* ————————————————— pandas (Phase 2) —————————————————

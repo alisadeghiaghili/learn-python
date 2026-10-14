@@ -511,3 +511,142 @@ describe('pandas (Phase 2)', () => {
     expect(preds.rows('df', 3)(snapshot(state), state)).toBe(true);
   });
 });
+
+describe('asyncio (concurrency exemplar)', () => {
+  test('an async def returns a coroutine (not a result)', () => {
+    const state = runFresh(
+      'async def greet():\n    print("hi")\n    await None\nc = greet()',
+    );
+    const o = state.heap[state.frames[0].locals.c as string];
+    expect(o.type).toBe('coroutine');
+    expect((o.value as { status: string }).status).toBe('pending');
+    // calling it did NOT run the body
+    expect(state.stdout).toEqual([]);
+    expect(preds.isCoroutine('c')(snapshot(state), state)).toBe(true);
+  });
+
+  test('create_task wraps a coroutine in a Task', () => {
+    const state = runFresh(
+      'import asyncio as a\nasync def greet():\n    print("hi")\nc = greet()\nt = a.create_task(c)',
+    );
+    const to = state.heap[state.frames[0].locals.t as string];
+    expect(to.type).toBe('task');
+    const tv = to.value as { coro: string; name: string };
+    expect(tv.name).toBe('greet');
+    // the task points at the same coroutine object
+    expect(tv.coro).toBe(state.frames[0].locals.c as string);
+    expect(preds.isTask('t')(snapshot(state), state)).toBe(true);
+  });
+
+  test('a.run runs one task to completion', () => {
+    const state = runFresh(
+      'import asyncio as a\nasync def greet():\n    print("A")\n    await None\nt = a.create_task(greet())\na.run(t)',
+    );
+    expect(state.stdout).toEqual(['A']);
+    const to = state.heap[state.frames[0].locals.t as string];
+    expect((to.value as { status: string }).status).toBe('done');
+    expect(preds.taskStatus('t', 'done')(snapshot(state), state)).toBe(true);
+  });
+
+  test('a.run interleaves two tasks (A, B, A, B) via the event loop', () => {
+    const state = runFresh(
+      [
+        'import asyncio as a',
+        'async def a_task():',
+        '    print("A")',
+        '    await None',
+        '    print("A done")',
+        'async def b_task():',
+        '    print("B")',
+        '    await None',
+        '    print("B done")',
+        'ta = a.create_task(a_task())',
+        'tb = a.create_task(b_task())',
+        'a.run(ta, tb)',
+      ].join('\n'),
+    );
+    // round-robin: each task prints once, yields, and the loop alternates
+    expect(state.stdout).toEqual(['A', 'B', 'A done', 'B done']);
+    expect(state.ticks).toBe(4);
+    expect(preds.loopRan(4)(snapshot(state), state)).toBe(true);
+    expect(preds.taskStatus('ta', 'done')(snapshot(state), state)).toBe(true);
+    expect(preds.taskStatus('tb', 'done')(snapshot(state), state)).toBe(true);
+  });
+
+  test('an await yields a tick; the loop hands it to the other task', () => {
+    const state = runFresh(
+      [
+        'import asyncio as a',
+        'async def first():',
+        '    print("1a")',
+        '    await None',
+        '    print("1b")',
+        'async def second():',
+        '    print("2")',
+        't1 = a.create_task(first())',
+        't2 = a.create_task(second())',
+        'a.run(t1, t2)',
+      ].join('\n'),
+    );
+    // t1 prints "1a", suspends on await; loop moves to t2 ("2"); back to t1 ("1b")
+    expect(state.stdout).toEqual(['1a', '2', '1b']);
+    // after a.run, t1 finished but t2 also did; exactly the interleaved order above
+    expect(preds.loopRan(2)(snapshot(state), state)).toBe(true);
+  });
+
+  test('a.sleep is a no-op builtin (the waiting is the await)', () => {
+    const state = runFresh(
+      [
+        'import asyncio as a',
+        'async def wait():',
+        '    await a.sleep(0.1)',
+        '    print("woke")',
+        't = a.create_task(wait())',
+        'a.run(t)',
+      ].join('\n'),
+    );
+    expect(state.stdout).toEqual(['woke']);
+    expect(preds.taskStatus('t', 'done')(snapshot(state), state)).toBe(true);
+  });
+
+  test('gather collects finished task results', () => {
+    const state = runFresh(
+      [
+        'import asyncio as a',
+        'async def one():',
+        '    print("1")',
+        '    return 1',
+        'async def two():',
+        '    print("2")',
+        '    return 2',
+        't1 = a.create_task(one())',
+        't2 = a.create_task(two())',
+        'a.run(t1, t2)',
+        'r = a.gather(t1, t2)',
+      ].join('\n'),
+    );
+    const ro = state.heap[state.frames[0].locals.r as string];
+    expect(ro.type).toBe('list');
+    // the coroutines returned 1 and 2
+    expect(ro.value).toEqual([1, 2]);
+  });
+
+  test('asyncio predicates: isTask, differentTasks, taskStatus', () => {
+    const state = runFresh(
+      [
+        'import asyncio as a',
+        'async def x():',
+        '    print("x")',
+        'async def y():',
+        '    print("y")',
+        'tx = a.create_task(x())',
+        'ty = a.create_task(y())',
+      ].join('\n'),
+    );
+    expect(preds.isTask('tx')(snapshot(state), state)).toBe(true);
+    expect(preds.isTask('ty')(snapshot(state), state)).toBe(true);
+    expect(preds.differentTasks('tx', 'ty')(snapshot(state), state)).toBe(true);
+    // not run yet, so not done
+    expect(preds.taskStatus('tx', 'done')(snapshot(state), state)).not.toBe(true);
+  });
+});
