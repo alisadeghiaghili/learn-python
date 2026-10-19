@@ -90,10 +90,9 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 18px;
-  letter-spacing: 0.01em;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.02em;
   color: var(--text);
   text-decoration: none;
 }
@@ -106,8 +105,8 @@ body {
 
 .brand-logo {
   display: block;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 6px;
   flex: 0 0 auto;
 }
@@ -124,6 +123,90 @@ body {
   font-family: var(--mono);
   color: var(--haze);
   font-size: 12px;
+}
+
+.lang-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.lang-btn {
+  min-width: 3.2rem;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lang-btn:hover {
+  border-color: currentColor;
+}
+
+.lang-caret {
+  width: 0;
+  height: 0;
+  border-inline-start: 4px solid transparent;
+  border-inline-end: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.7;
+}
+
+.lang-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-end: 0;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 88px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+  z-index: 60;
+}
+
+.lang-dropdown.is-open {
+  display: flex;
+}
+
+.lang-dropdown[hidden] {
+  display: none !important;
+}
+
+.lang-dropdown.is-open[hidden] {
+  display: flex !important;
+}
+
+.lang-option {
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: start;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.lang-option:hover {
+  background: var(--panel-2);
+}
+
+.lang-option.on {
+  border-color: color-mix(in srgb, var(--dvc) 50%, var(--line));
+  background: color-mix(in srgb, var(--dvc) 14%, transparent);
 }
 
 .toolbar-actions {
@@ -175,10 +258,10 @@ body {
 }
 
 .help-btn {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  min-height: 36px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
