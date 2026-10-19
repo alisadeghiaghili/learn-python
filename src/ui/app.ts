@@ -6,6 +6,7 @@
  */
 
 import { createSession, type Session, referenceEdges, liveObjectIds } from '../engine/session';
+import { setTraceEnabled } from '../engine/evaluator';
 import { checkGoal } from '../engine/checks';
 import type { GoalSpec, Level, MemoryState, Sequence, Snapshot } from '../engine/types';
 import { splitPythonStatements } from '../engine/steps';
@@ -109,6 +110,8 @@ export class App {
   private undoStack: UndoEntry[] = [];
   private statementsUsed = 0;
   private levelCompleted = false;
+  /** Index into the current run's trace while the learner scrubs; null = live state. */
+  private stepIndex: number | null = null;
   private showHint = false;
   private progress: Progress = loadProgress();
   private checkResults: DockCheck[] = [];
@@ -116,6 +119,7 @@ export class App {
   constructor(root: HTMLElement) {
     this.root = root;
     this.session = createSession();
+    setTraceEnabled(true); // record each run so loops can be watched step by step
     this.mount();
     this.init();
     void startVisitorCounter((count) => this.renderVisitors(count));
@@ -200,6 +204,7 @@ export class App {
         if (tab === 'memory') this.renderBoard();
         if (tab === 'ram') this.renderRamBoard();
       },
+      (index) => this.renderStep(index),
     );
     this.editor = new ScriptEditorView(
       this.root.querySelector('#editor-drawer')!,
@@ -359,15 +364,26 @@ export class App {
 
   /* —— Board (memory canvas) rendering —— */
 
+  /**
+   * The frame the canvas should show: a specific recorded step while the
+   * learner scrubs, otherwise the live (final) session state.
+   */
+  private currentFrame(): MemoryState {
+    if (this.stepIndex !== null && this.stepIndex < (this.session.state.trace?.length ?? 0)) {
+      return this.session.state.trace![this.stepIndex]!;
+    }
+    return this.session.state;
+  }
+
   private renderBoard(): void {
-    const state = this.session.state;
+    const state = this.currentFrame();
     const edges = referenceEdges(state);
     const live = liveObjectIds(state);
     renderMemory(this.board.canvasEl, state, edges, live);
   }
 
   private renderRamBoard(): void {
-    const state = this.session.state;
+    const state = this.currentFrame();
     renderRam(this.board.ramCanvasEl, state, liveObjectIds(state));
   }
 
@@ -375,6 +391,12 @@ export class App {
   private renderBoards(): void {
     this.renderBoard();
     this.renderRamBoard();
+  }
+
+  /** The learner scrubbed the stepper: paint that recorded frame on both boards. */
+  private renderStep(index: number): void {
+    this.stepIndex = index;
+    this.renderBoards();
   }
 
   /* —— Execution & verification —— */
@@ -395,6 +417,7 @@ export class App {
     });
 
     try {
+      this.stepIndex = null; // a fresh run shows the final state, not an old step
       const before = this.session.state.stdout.length;
       this.session.run(source);
       const newOut = this.session.state.stdout.slice(before);
@@ -405,6 +428,7 @@ export class App {
     }
 
     this.board.setPlots(this.session.state.plots);
+    this.board.setTrace(this.session.state.trace ?? []);
     this.renderBoards();
     if (this.level) this.checkVerification(source);
   }
@@ -689,6 +713,9 @@ export class App {
   }
 
   private openLevels(): void {
+    const firstId = allLevels()[0]?.id;
+    const diffDots = (n: number): string =>
+      '●'.repeat(n) + '○'.repeat(5 - n);
     const body = sequences
       .map((s) => {
         const rows = s.levels
@@ -696,9 +723,11 @@ export class App {
             const p = this.progress[l.id];
             const solved = Boolean(p?.solved);
             const active = this.level?.id === l.id;
-            return `<button type="button" class="level-row ${solved ? 'solved' : ''}${active ? ' active' : ''}" data-level="${l.id}">
-              <span class="id">${escapeHtml(l.id)}</span>
+            const isStart = l.id === firstId;
+            return `<button type="button" class="level-row ${solved ? 'solved' : ''}${active ? ' active' : ''}${isStart ? ' start-here' : ''}" data-level="${l.id}">
+              <span class="id">${isStart ? '▶ ' : ''}${escapeHtml(l.id)}</span>
               <span class="name">${escapeHtml(l.name)}</span>
+              <span class="diff" title="difficulty ${l.difficulty}/5" aria-label="difficulty ${l.difficulty} of 5">${diffDots(l.difficulty)}</span>
               <span class="par-note">par ${l.par}</span>
               <span class="chip ${solved ? 'ok' : ''}">${solved ? `✓ ${p?.bestStatements ?? l.par}` : l.par}</span>
             </button>`;
@@ -713,12 +742,14 @@ export class App {
 
     const modal = showModal({
       title: 'Levels',
-      bodyHtml: `<p>Pick a challenge. Each level mutates the memory graph to a target state.</p>
+      bodyHtml: `<p>Pick a challenge. New here? Start at the top — <strong>▶ Hello, world</strong> — and work down. The course builds from plain Python up to the memory model, then the libraries.</p>
         <div class="legend-box">
           <div class="next-title">How to read</div>
           <ul class="legend-list">
             <li><span class="par-note">par N</span> ideal number of statements</li>
-            <li><span class="chip ok">✓ N</span> solved, best ${''}statements</li>
+            <li><span class="chip ok">✓ N</span> solved, best statements</li>
+            <li><span class="diff">●●●○○</span> difficulty, 1–5</li>
+            <li><span class="start-mark">▶</span> start here if you are new</li>
           </ul>
         </div>
         ${body}`,
@@ -862,13 +893,18 @@ pytest
     showModal({
       title: 'Welcome to learn-python',
       bodyHtml: renderMarkdown(`
-Make Python's memory model visible. Names live on the **stack**; mutable objects live on the **heap**; amber arrows are **references**.
+Learn Python **from zero**, one small step at a time — and watch it work.
 
-- **Memory tab** — the live object graph.
+You start where every Python program starts: \`print("Hello, world!")\`. Then you save a value, do a little math, make a decision with \`if\`, and repeat a block with \`for\`. No prior Python needed.
+
+Only once you can write real Python does the course show *how the computer holds your data* — names, objects, and the references between them, drawn live on the **Memory** canvas.
+
+- **Memory tab** — the live object graph (stack frames, heap objects, amber reference edges).
 - **Plot tab** — for the plotting levels.
 - **Dock** — the always-on guide with a per-check checklist.
+- **Step bar** — after a run, ⏮ ◀ ▶ ⏭ scrub the run so you can *watch a loop* one step at a time.
 
-There are **${allLevels().length} levels** across ${sequences.length} series, from first bindings to aliasing, containers, and call frames.
+There are **${allLevels().length} levels** across ${sequences.length} series. New here? Open levels and start with the first one — **Hello, world**.
 `),
       actions: [
         { label: 'Sandbox', className: 'ghost', onClick: () => undefined },

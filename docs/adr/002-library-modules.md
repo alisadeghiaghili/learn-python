@@ -53,8 +53,7 @@ Extend the subset, not the runtime philosophy:
 - **Fidelity boundary is explicit and fixed:** the sandbox cannot read/write real files. I/O levels
   (`read_csv`, `to_excel`, `to_pickle`, h5py) model the *result object* and the *serialization
   meaning* (e.g. pickle = freezing the whole object graph to bytes, preserving aliasing), not real
-  disk access. `for` is not in the subset, so iterator consumption is taught with explicit `next()` —
-  which is *deliberately better* for this tool: each step is visible on the canvas, whereas `for`
-  would hide consumption inside the loop.
+  disk access. (Control flow `if`/`for`/`while` and `range` were added to the subset later — see
+  ADR 003; the `iter`/`next` protocol is still taught explicitly so the iterator object is visible.)
 - Scope is capped per library to the 5-ladder "0→90" (mental model → daily API → real patterns →
   depth/gotchas → capstone project). See `ENGINE-EXTENSION.md` for the contract and phase plan.

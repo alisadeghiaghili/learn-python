@@ -5,6 +5,7 @@
 import { describe, test, expect } from 'vitest';
 
 import { runFresh, displayValue, snapshot, referenceEdges, liveObjectIds } from '../src/engine/session';
+import { setTraceEnabled, isTraceEnabled } from '../src/engine/evaluator';
 import { checkGoal, preds, deepEqual } from '../src/engine/checks';
 
 describe('engine', () => {
@@ -278,7 +279,9 @@ describe('iterators (Phase 0b)', () => {
     expect(() => runFresh('x = 5\nit = iter(x)')).toThrow(/not iterable/);
   });
 
-  test('iter() of a string literal raises (strings are not heap objects here)', () => {
+  test('manual iter() only walks list/tuple/set (strings are walked with for)', () => {
+    // The stateful iter()/next() protocol is for containers; a string is walked
+    // by a for-loop over its one-letter characters instead.
     expect(() => runFresh('it = iter("ab")')).toThrow(/not iterable/);
   });
 
@@ -786,5 +789,127 @@ describe('threading (concurrency exemplar)', () => {
     expect(preds.threadStatus('tx', 'not-started')(snapshot(state), state)).toBe(true);
     expect(preds.isLock('lk')(snapshot(state), state)).toBe(true);
     expect(preds.lockFree('lk')(snapshot(state), state)).toBe(true);
+  });
+});
+
+describe('control flow (if / for / while / range / break / continue)', () => {
+  test('if / elif / else branches on the truthy condition', () => {
+    const state = runFresh([
+      'n = 3',
+      'if n > 5:',
+      '    print("big")',
+      'elif n > 1:',
+      '    print("mid")',
+      'else:',
+      '    print("small")',
+    ].join('\n'));
+    expect(state.stdout).toEqual(['mid']);
+  });
+
+  test('for over range(4) accumulates and leaves the loop variable bound', () => {
+    const state = runFresh([
+      'total = 0',
+      'for i in range(4):',
+      '    total = total + i',
+    ].join('\n'));
+    expect(state.frames[0].locals.total).toBe(6); // 0+1+2+3
+    expect(state.frames[0].locals.i).toBe(3); // last value stays bound
+  });
+
+  test('for over a list walks each element in order', () => {
+    const state = runFresh([
+      'xs = [10, 20, 30]',
+      'n = 0',
+      'for x in xs:',
+      '    n = n + x',
+    ].join('\n'));
+    expect(state.frames[0].locals.n).toBe(60);
+  });
+
+  test('for over a raw string literal yields one-letter strings', () => {
+    const state = runFresh([
+      'n = 0',
+      'for c in "ab":',
+      '    n = n + 1',
+    ].join('\n'));
+    expect(state.frames[0].locals.n).toBe(2);
+  });
+
+  test('while loops until the condition is false', () => {
+    const state = runFresh([
+      'i = 0',
+      'while i < 3:',
+      '    i = i + 1',
+    ].join('\n'));
+    expect(state.frames[0].locals.i).toBe(3);
+  });
+
+  test('break exits the innermost loop early', () => {
+    const state = runFresh([
+      'out = []',
+      'for i in range(10):',
+      '    if i == 3:',
+      '        break',
+      '    out.append(i)',
+    ].join('\n'));
+    expect(state.heap[state.frames[0].locals.out as string].repr).toBe('[0, 1, 2]');
+  });
+
+  test('continue skips to the next iteration', () => {
+    const state = runFresh([
+      'out = []',
+      'for i in range(4):',
+      '    if i == 2:',
+      '        continue',
+      '    out.append(i)',
+    ].join('\n'));
+    expect(state.heap[state.frames[0].locals.out as string].repr).toBe('[0, 1, 3]');
+  });
+
+  test('range supports start/stop and step (including negative step)', () => {
+    const a = runFresh('r = range(2, 8, 2)');
+    expect(a.heap[a.frames[0].locals.r as string].repr).toBe('[2, 4, 6]');
+    const b = runFresh('r = range(5, 0, -1)');
+    expect(b.heap[b.frames[0].locals.r as string].repr).toBe('[5, 4, 3, 2, 1]');
+  });
+
+  test('nested control flow (if inside a for) composes', () => {
+    const state = runFresh([
+      'n = 0',
+      'for i in range(3):',
+      '    if i > 0:',
+      '        n = n + i',
+    ].join('\n'));
+    expect(state.frames[0].locals.n).toBe(3); // 1 + 2
+  });
+});
+
+describe('step recording (watch it run)', () => {
+  test('is off by default so normal runs never pay for cloning', () => {
+    expect(isTraceEnabled()).toBe(false);
+    const state = runFresh('x = 1\nfor i in range(3):\n    x = x + 1');
+    expect(state.trace).toBeUndefined();
+    expect(state.frames[0].locals.x).toBe(4);
+  });
+
+  test('records the pre-run frame and one frame per loop iteration', () => {
+    setTraceEnabled(true);
+    try {
+      const state = runFresh([
+        'n = 0',
+        'for i in range(4):',
+        '    n = n + i',
+      ].join('\n'));
+      const trace = state.trace ?? [];
+      expect(trace.length).toBeGreaterThanOrEqual(5);
+      // The accumulator visibly grows as the loop builds: a mid-loop 1 and a final 6.
+      const ns = trace.map((f) => f.frames[0].locals.n as number | undefined);
+      expect(ns).toContain(1);
+      expect(ns[ns.length - 1]).toBe(6);
+      // Frames do not nest the (growing) trace array inside themselves.
+      expect(trace[0].trace).toBeUndefined();
+    } finally {
+      setTraceEnabled(false);
+    }
   });
 });

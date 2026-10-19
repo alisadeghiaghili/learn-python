@@ -88,8 +88,24 @@ class Parser {
     if (tok.type === 'KEYWORD' && tok.value === 'import') {
       return this.parseImport();
     }
-    if (tok.type === 'KEYWORD' && (tok.value === 'if' || tok.value === 'while' || tok.value === 'for')) {
-      throw new Error('SyntaxError: control flow is not supported in v0');
+    if (tok.type === 'KEYWORD' && tok.value === 'if') {
+      return this.parseIf();
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'for') {
+      return this.parseFor();
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'while') {
+      return this.parseWhile();
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'break') {
+      this.next();
+      this.eatNewline();
+      return { kind: 'Break', line: tok.line };
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'continue') {
+      this.next();
+      this.eatNewline();
+      return { kind: 'Continue', line: tok.line };
     }
     return this.parseSimpleStatement();
   }
@@ -124,6 +140,25 @@ class Parser {
     return false;
   }
 
+  /**
+   * Parse an indented suite following a `name(...):` / `if ...:` header: consume
+   * the `:` `NEWLINE` `INDENT`, then statements until the `DEDENT`. Shared by
+   * `def`, `async def`, `if`, `elif`, `else`, `for`, and `while` so nested
+   * indented blocks reuse one code path.
+   */
+  private parseSuite(): AstNode[] {
+    this.expect('NEWLINE');
+    this.expect('INDENT');
+    const body: AstNode[] = [];
+    while (this.peek() && this.peek().type !== 'DEDENT' && this.peek().type !== 'END') {
+      while (this.peek() && this.peek().type === 'NEWLINE') this.next();
+      if (!this.peek() || this.peek().type === 'DEDENT' || this.peek().type === 'END') break;
+      body.push(this.parseStatement());
+    }
+    this.expect('DEDENT');
+    return body;
+  }
+
   private parseFunctionDef(): AstNode {
     const tok = this.expect('KEYWORD', 'def');
     const name = this.expect('NAME').value;
@@ -135,15 +170,7 @@ class Parser {
     }
     this.expect('OP', ')');
     this.eatOp(':');
-    this.expect('NEWLINE');
-    this.expect('INDENT');
-    const body: AstNode[] = [];
-    while (this.peek() && this.peek().type !== 'DEDENT' && this.peek().type !== 'END') {
-      while (this.peek() && this.peek().type === 'NEWLINE') this.next();
-      if (!this.peek() || this.peek().type === 'DEDENT' || this.peek().type === 'END') break;
-      body.push(this.parseStatement());
-    }
-    this.expect('DEDENT');
+    const body = this.parseSuite();
     return { kind: 'FunctionDef', name, params, body, line: tok.line };
   }
 
@@ -160,16 +187,62 @@ class Parser {
     }
     this.expect('OP', ')');
     this.eatOp(':');
-    this.expect('NEWLINE');
-    this.expect('INDENT');
-    const body: AstNode[] = [];
-    while (this.peek() && this.peek().type !== 'DEDENT' && this.peek().type !== 'END') {
-      while (this.peek() && this.peek().type === 'NEWLINE') this.next();
-      if (!this.peek() || this.peek().type === 'DEDENT' || this.peek().type === 'END') break;
-      body.push(this.parseStatement());
-    }
-    this.expect('DEDENT');
+    const body = this.parseSuite();
     return { kind: 'CoroutineDef', name, params, body, line: tok.line };
+  }
+
+  /** `if <test>:` body [`elif <test>:` body ...] [`else:` body] */
+  private parseIf(): AstNode {
+    const tok = this.expect('KEYWORD', 'if');
+    const test = this.parseExpr();
+    this.eatOp(':');
+    const body = this.parseSuite();
+    const elifs: Array<{ test: AstNode; body: AstNode[] }> = [];
+    let elseBody: AstNode[] | null = null;
+    for (;;) {
+      // Skip the NEWLINE(s) before the dedent; the header's NEWLINE was already
+      // consumed by parseSuite, so the next NEWLINE belongs to the branch head.
+      this.eatNewline();
+      const n = this.peek();
+      if (n && n.type === 'KEYWORD' && n.value === 'elif') {
+        this.next();
+        const branchTest = this.parseExpr();
+        this.eatOp(':');
+        const branchBody = this.parseSuite();
+        elifs.push({ test: branchTest, body: branchBody });
+      } else if (n && n.type === 'KEYWORD' && n.value === 'else') {
+        this.next();
+        this.eatOp(':');
+        elseBody = this.parseSuite();
+        this.eatNewline();
+        break;
+      } else {
+        break;
+      }
+    }
+    return { kind: 'If', test, body, elifs, elseBody, line: tok.line };
+  }
+
+  /** `for <name> in <iterable>:` body */
+  private parseFor(): AstNode {
+    const tok = this.expect('KEYWORD', 'for');
+    const target = this.expect('NAME').value;
+    this.expect('KEYWORD', 'in');
+    const iterable = this.parseExpr();
+    this.eatOp(':');
+    const body = this.parseSuite();
+    this.eatNewline();
+    return { kind: 'For', target, iterable, body, line: tok.line };
+  }
+
+  /** `while <test>:` body */
+  private parseWhile(): AstNode {
+    const tok = this.expect('KEYWORD', 'while');
+    const test = this.parseExpr();
+    this.eatOp(':');
+    const body = this.parseSuite();
+    this.eatNewline();
+    return { kind: 'While', test, body, line: tok.line };
   }
 
   /** `import x`, `import x.y`, or `import x as z`. (from-imports are v1.) */

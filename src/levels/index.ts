@@ -5,6 +5,9 @@
  */
 
 import type { Level, Sequence } from '../engine/types';
+import { series as basics } from './basics';
+import { series as flow } from './flow';
+import { series as loops } from './loops';
 import { series as names } from './names';
 import { series as aliasing } from './aliasing';
 import { series as containers } from './containers';
@@ -19,11 +22,27 @@ import { series as mutation } from './mutation';
 import { series as functions } from './functions';
 import { series as plotting } from './plotting';
 
-/** All series, in teaching order. */
+/**
+ * All series, in teaching order.
+ *
+ * Pure-Python spine first (basics → flow → loops → functions), then the memory
+ * model (names → containers → mutation → aliasing → copy-semantics → iterators),
+ * then functional + data libraries (functional → numpy → pandas), and finally
+ * concurrency (asyncio → threading) plus plotting.
+ *
+ * Prerequisites are respected: `functions` (def) precedes the libraries and
+ * concurrency series that use it, and `mutation` (.append) precedes `aliasing`
+ * and `copy-semantics`, which mutate lists.
+ */
 export const sequences: Sequence[] = [
+  ...basics,
+  ...flow,
+  ...loops,
+  ...functions,
   ...names,
-  ...aliasing,
   ...containers,
+  ...mutation,
+  ...aliasing,
   ...copySemantics,
   ...iterators,
   ...functional,
@@ -31,8 +50,6 @@ export const sequences: Sequence[] = [
   ...pandas,
   ...asyncio,
   ...threading,
-  ...mutation,
-  ...functions,
   ...plotting,
 ];
 

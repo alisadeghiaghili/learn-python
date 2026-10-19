@@ -22,9 +22,11 @@ import type {
  */
 export function run(source: string, state: MemoryState): MemoryState {
   try {
+    if (traceEnabled) state.trace = [cloneState(state)]; // frame 0: state before running
     const ast = parse(source);
     for (const stmt of ast) {
       execStatement(stmt, state);
+      recordStep(state); // after each top-level statement
     }
     // A nested child may have been mutated in place (e.g. a[1].append(3)),
     // leaving a parent container's cached repr stale. Recompute container
@@ -74,6 +76,113 @@ export function runFresh(source = ''): MemoryState {
   const state = createModuleState();
   if (source) run(source, state);
   return state;
+}
+
+/**
+ * —— Step-recording ("watch it run") ——
+ *
+ * When enabled, the engine records a deep clone of the memory state after every
+ * top-level statement and after every loop iteration. The replay UI scrubs
+ * these frames to animate a loop running on the canvas. It is OFF by default so
+ * the normal level/sandbox path (and the solvability tests) never pay for the
+ * cloning, and the abstract model (snapshot/goals) is untouched either way.
+ */
+const TRACE_CAP = 60;
+let traceEnabled = false;
+
+/** Turn step-recording on or off for subsequent `run` calls. */
+export function setTraceEnabled(on: boolean): void {
+  traceEnabled = on;
+}
+
+/** Whether step-recording is currently on. */
+export function isTraceEnabled(): boolean {
+  return traceEnabled;
+}
+
+/** Push the current state onto `state.trace` (cloned, trace stripped), if enabled. */
+function recordStep(state: MemoryState): void {
+  if (!traceEnabled) return;
+  const arr = state.trace;
+  if (!arr || arr.length >= TRACE_CAP) return;
+  const frame = cloneState(state);
+  delete frame.trace; // don't nest the growing array inside every frame
+  arr.push(frame);
+}
+
+/** Run a block of statements, so loop/if bodies recurse through execStatement. */
+function execBody(body: AstNode[], state: MemoryState): void {
+  for (const stmt of body) execStatement(stmt, state);
+}
+
+/**
+ * `break` / `continue` are signalled by thrown markers caught by the innermost
+ * For/While executor (the engine is single-threaded, so exception control flow
+ * is safe and mirrors how `return` is already done).
+ */
+class PyBreak extends Error {
+  constructor() {
+    super('break');
+  }
+}
+class PyContinue extends Error {
+  constructor() {
+    super('continue');
+  }
+}
+
+/**
+ * Flatten an iterable expression value into the list of element values a `for`
+ * loop will bind its target to, one element at a time. Handles list/tuple/set
+ * heap objects, heap strings, and raw string literals (strings are raw values
+ * in this engine, not heap objects).
+ */
+function iterableToRtValues(v: RtValue, state: MemoryState, line: number): RtValue[] {
+  if (typeof v !== 'string') {
+    throw new Error(`TypeError: '${typeName(v, state)}' object is not iterable (line ${line})`);
+  }
+  const obj = state.heap[v];
+  if (!obj) {
+    // A raw string literal value (e.g. `for x in 'abc'`).
+    const s = v as string;
+    const out: RtValue[] = [];
+    for (let i = 0; i < s.length; i++) out.push(allocString(s[i]!, state));
+    return out;
+  }
+  if (obj.type === 'str') {
+    const s = obj.value as string;
+    const out: RtValue[] = [];
+    for (let i = 0; i < s.length; i++) out.push(allocString(s[i]!, state));
+    return out;
+  }
+  if (['list', 'tuple', 'set'].includes(obj.type)) {
+    return [...(obj.value as RtValue[])];
+  }
+  throw new Error(`TypeError: '${obj.type}' object is not iterable (line ${line})`);
+}
+
+/**
+ * `range(stop)` / `range(start, stop)` / `range(start, stop, step)` → a list of
+ * ints. Returning a concrete list keeps the loop's target a real heap object on
+ * the canvas (the beginner "here are the numbers you will walk through" picture).
+ */
+function makeRange(args: RtValue[], state: MemoryState, line: number): RtValue {
+  const nums = args.map((a) => Math.trunc(derefNumber(a, state)));
+  let start = 0;
+  let stop: number;
+  let step = 1;
+  if (nums.length === 1) stop = nums[0]!;
+  else if (nums.length === 2) [start, stop] = [nums[0]!, nums[1]!];
+  else if (nums.length === 3) [start, stop, step] = [nums[0]!, nums[1]!, nums[2]!];
+  else throw new Error(`TypeError: range() expects 1-3 arguments (line ${line})`);
+  if (step === 0) throw new Error(`ZeroDivisionError: range() step cannot be zero (line ${line})`);
+  const out: number[] = [];
+  if (step > 0) for (let i = start; i < stop; i += step) out.push(i);
+  else for (let i = start; i > stop; i += step) out.push(i);
+  const obj = allocObject('list', out, formatListLike(out, state, '[', ']'));
+  state.heap[obj.id] = obj;
+  obj.repr = formatObject(obj, state);
+  return obj.id;
 }
 
 /**
@@ -131,6 +240,64 @@ function execStatement(node: AstNode, state: MemoryState): void {
       setFrameLocal(currentFrame(state), localName, mod.id);
       return;
     }
+    case 'If': {
+      let taken = false;
+      if (truthy(evalExpr(node.test, state), state)) {
+        execBody(node.body, state);
+        taken = true;
+      } else {
+        for (const branch of node.elifs) {
+          if (truthy(evalExpr(branch.test, state), state)) {
+            execBody(branch.body, state);
+            taken = true;
+            break;
+          }
+        }
+      }
+      if (!taken && node.elseBody) execBody(node.elseBody, state);
+      return;
+    }
+    case 'For': {
+      const items = iterableToRtValues(evalExpr(node.iterable, state), state, node.line);
+      for (let i = 0; i < items.length; i++) {
+        setFrameLocal(currentFrame(state), node.target, items[i]!);
+        try {
+          execBody(node.body, state);
+        } catch (e) {
+          if (e instanceof PyBreak) break;
+          if (e instanceof PyContinue) {
+            recordStep(state);
+            continue;
+          }
+          throw e;
+        }
+        recordStep(state);
+      }
+      return;
+    }
+    case 'While': {
+      // A beginner's `while True:` with no exit must not hang the browser.
+      let guard = 0;
+      while (truthy(evalExpr(node.test, state), state)) {
+        if (++guard > 100000) throw new Error('RuntimeError: while loop did not terminate (infinite loop)');
+        try {
+          execBody(node.body, state);
+        } catch (e) {
+          if (e instanceof PyBreak) break;
+          if (e instanceof PyContinue) {
+            recordStep(state);
+            continue;
+          }
+          throw e;
+        }
+        recordStep(state);
+      }
+      return;
+    }
+    case 'Break':
+      throw new PyBreak();
+    case 'Continue':
+      throw new PyContinue();
     case 'Pass':
       return;
     default:
@@ -259,6 +426,11 @@ function readTarget(target: AstNode, state: MemoryState): RtValue {
 function evalExpr(node: AstNode, state: MemoryState): RtValue {
   switch (node.kind) {
     case 'Literal':
+      // String literals are heap objects (the thesis: strings are objects), so
+      // concatenation, .upper(), indexing, `for`, and `in` all flow through the
+      // single str code path, and the value is visible on the canvas. Numbers,
+      // booleans, and None stay raw in-frame.
+      if (typeof node.value === 'string') return allocString(node.value, state);
       return node.value;
     case 'Name':
       return lookupName(node.id, state, node.line);
@@ -391,6 +563,9 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
     }
     if (name === 'bool') {
       return truthy(args[0], state);
+    }
+    if (name === 'range') {
+      return makeRange(args, state, node.line);
     }
     if (name === 'iter') {
       return makeIterator(args[0], state, node.line);
@@ -2066,8 +2241,8 @@ function frameSetColumn(dfId: string, colKey: RtValue, value: RtValue, state: Me
 function readCsv(args: RtValue[], state: MemoryState, line: number): RtValue {
   if (args.length !== 2) throw new Error(`TypeError: read_csv(name, data) takes two arguments (line ${line})`);
   // a string-literal filename is a raw value; a bound name resolves to its str
-  const name = typeof args[0] === 'string'
-    ? (state.heap[args[0]] ? displayValue(args[0], state) : args[0])
+  const name = typeof args[0] === 'string' && state.heap[args[0]]?.type === 'str'
+    ? (state.heap[args[0]].value as string)
     : displayValue(args[0], state);
   const dfId = makeDataFrame([args[1]], state, line) as string;
   const df = state.heap[dfId];
@@ -2135,7 +2310,12 @@ function truthy(v: RtValue, state: MemoryState): boolean {
 }
 
 function derefNumber(v: RtValue, state: MemoryState): number {
-  void state;
+  // A string is a heap object now; dereference to its text so `int('3')`,
+  // arithmetic, and `range`-style numeric coercion still read the value, not the
+  // object id.
+  if (typeof v === 'string' && state.heap[v]?.type === 'str') {
+    return Number(state.heap[v].value);
+  }
   return Number(v);
 }
 
@@ -2254,13 +2434,22 @@ function compareOp(op: string, left: RtValue, right: RtValue, state: MemoryState
   if (op === '!=') return !valuesEqual(left, right, state);
   if (op === 'in') {
     const container = state.heap[right as string];
-    if (!container) return false;
-    if (['list', 'tuple', 'set'].includes(container.type)) {
-      return (container.value as RtValue[]).some((v) => valuesEqual(v, left, state));
+    if (container) {
+      if (['list', 'tuple', 'set'].includes(container.type)) {
+        return (container.value as RtValue[]).some((v) => valuesEqual(v, left, state));
+      }
+      if (container.type === 'dict') {
+        return (container.value as Array<[string, RtValue]>).some(([k]) => k === dictKeyRepr(left, state));
+      }
+      // substring membership: `'a' in 'abc'`
+      if (container.type === 'str') {
+        return typeof left === 'string' && state.heap[left]?.type === 'str'
+          ? (container.value as string).includes(state.heap[left].value as string)
+          : false;
+      }
     }
-    if (container.type === 'dict') {
-      return (container.value as Array<[string, RtValue]>).some(([k]) => k === dictKeyRepr(left, state));
-    }
+    // right was a raw value (defensive; strings are heap objects now)
+    if (typeof right === 'string' && typeof left === 'string') return right.includes(left);
   }
   const a = Number(left);
   const b = Number(right);

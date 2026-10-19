@@ -72,6 +72,13 @@ export interface MemoryState {
    * asyncio goals read to prove the loop actually interleaved.
    */
   ticks: number;
+  /**
+   * Optional recorded execution steps (the "watch it run" replay). Present and
+   * non-empty only while the trace hook is enabled for the current run; each
+   * entry is a deep clone of the memory state after one statement or one loop
+   * iteration. Ignored by snapshot()/goals — a pure replay aid for the canvas.
+   */
+  trace?: MemoryState[];
 }
 
 /* —— Tokens —— */
@@ -224,6 +231,36 @@ export interface ImportNode extends BaseNode {
   /** Alias from `as`; null if the (first) module name is bound directly. */
   alias: string | null;
 }
+/** `if <test>:` with optional `elif` chain and `else`. */
+export interface IfNode extends BaseNode {
+  kind: 'If';
+  test: AstNode;
+  body: AstNode[];
+  /** Each elif branch: its test and body. */
+  elifs: Array<{ test: AstNode; body: AstNode[] }>;
+  elseBody: AstNode[] | null;
+}
+/** `for <target> in <iterable>:` */
+export interface ForNode extends BaseNode {
+  kind: 'For';
+  target: string;
+  iterable: AstNode;
+  body: AstNode[];
+}
+/** `while <test>:` */
+export interface WhileNode extends BaseNode {
+  kind: 'While';
+  test: AstNode;
+  body: AstNode[];
+}
+/** `break` — exit the innermost loop. */
+export interface BreakNode extends BaseNode {
+  kind: 'Break';
+}
+/** `continue` — skip to the next iteration of the innermost loop. */
+export interface ContinueNode extends BaseNode {
+  kind: 'Continue';
+}
 
 export type AstNode =
   | LiteralNode
@@ -248,7 +285,12 @@ export type AstNode =
   | CoroutineDefNode
   | AwaitNode
   | PassNode
-  | ImportNode;
+  | ImportNode
+  | IfNode
+  | ForNode
+  | WhileNode
+  | BreakNode
+  | ContinueNode;
 
 /* —— Goals / checks —— */
 

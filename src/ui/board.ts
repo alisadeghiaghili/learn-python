@@ -7,7 +7,7 @@
  * keeps firing without the tab being rebuilt.
  */
 
-import type { PlotSpec } from '../engine/types';
+import type { MemoryState, PlotSpec } from '../engine/types';
 import { escapeHtml } from './dialog';
 
 export type BoardTab = 'memory' | 'plot' | 'ram';
@@ -20,13 +20,29 @@ export class BoardView {
   private memoryTabBtn!: HTMLButtonElement;
   private plotTabBtn!: HTMLButtonElement;
   private ramTabBtn!: HTMLButtonElement;
+  private stepperBar!: HTMLElement;
+  private stepCounter!: HTMLElement;
+  private btnFirst!: HTMLButtonElement;
+  private btnPrev!: HTMLButtonElement;
+  private btnPlay!: HTMLButtonElement;
+  private btnLast!: HTMLButtonElement;
   private currentTab: BoardTab = 'memory';
   private plots: PlotSpec[] = [];
   private onTabChange?: (tab: BoardTab) => void;
+  /** Called with the frame index (0..trace.length-1) when the user scrubs. */
+  private onStep?: (index: number) => void;
+  /** Recorded execution frames; empty = stepper hidden. */
+  private trace: MemoryState[] = [];
+  private stepIndex = 0;
 
-  constructor(root: HTMLElement, onTabChange?: (tab: BoardTab) => void) {
+  constructor(
+    root: HTMLElement,
+    onTabChange?: (tab: BoardTab) => void,
+    onStep?: (index: number) => void,
+  ) {
     this.root = root;
     this.onTabChange = onTabChange;
+    this.onStep = onStep;
     this.render();
   }
 
@@ -66,6 +82,63 @@ export class BoardView {
     if (switching) this.onTabChange?.(this.currentTab);
   }
 
+  /**
+   * Provide the recorded execution frames for the "watch it run" stepper.
+   * An empty trace hides the bar; a non-empty one shows the transport controls
+   * and jumps to the final frame. App renders each frame on scrub.
+   */
+  setTrace(frames: MemoryState[]): void {
+    const changed = frames.length !== this.trace.length || frames !== this.trace;
+    this.trace = frames;
+    this.stepIndex = Math.max(frames.length - 1, 0);
+    if (changed) this.render();
+    this.updateStepper();
+  }
+
+  private stepNext(): void {
+    if (this.stepIndex < this.trace.length - 1) {
+      this.stepIndex++;
+      this.updateStepper();
+      this.onStep?.(this.stepIndex);
+    }
+  }
+
+  private stepPrev(): void {
+    if (this.stepIndex > 0) {
+      this.stepIndex--;
+      this.updateStepper();
+      this.onStep?.(this.stepIndex);
+    }
+  }
+
+  private stepFirst(): void {
+    if (this.stepIndex !== 0) {
+      this.stepIndex = 0;
+      this.updateStepper();
+      this.onStep?.(0);
+    }
+  }
+
+  private stepLast(): void {
+    const last = this.trace.length - 1;
+    if (this.stepIndex !== last) {
+      this.stepIndex = last;
+      this.updateStepper();
+      this.onStep?.(last);
+    }
+  }
+
+  private updateStepper(): void {
+    if (!this.stepperBar) return;
+    this.stepperBar.hidden = this.trace.length < 2;
+    if (this.trace.length < 2) return;
+    this.stepCounter.textContent = `${this.stepIndex + 1} / ${this.trace.length}`;
+    this.btnFirst.disabled = this.stepIndex === 0;
+    this.btnPrev.disabled = this.stepIndex === 0;
+    this.btnPlay.disabled = this.stepIndex >= this.trace.length - 1;
+    this.btnLast.disabled = this.stepIndex >= this.trace.length - 1;
+  }
+
   private render(): void {
     const hasPlot = this.plots.length > 0;
     this.root.innerHTML = `
@@ -96,6 +169,14 @@ export class BoardView {
           <div class="canvas-wrap"><svg id="ram-canvas" xmlns="http://www.w3.org/2000/svg"></svg></div>
         </div>
       </div>
+      <div class="step-bar" id="step-bar" hidden>
+        <span class="step-label">step</span>
+        <button type="button" class="step-btn" data-step="first" aria-label="First step" title="First step">⏮</button>
+        <button type="button" class="step-btn" data-step="prev" aria-label="Previous step" title="Previous step">◀</button>
+        <button type="button" class="step-btn play" data-step="play" aria-label="Play one step" title="Play one step">▶</button>
+        <button type="button" class="step-btn" data-step="last" aria-label="Last step" title="Last step">⏭</button>
+        <span class="step-count" id="step-count">1 / 1</span>
+      </div>
     `;
 
     this.canvas = this.root.querySelector('#canvas')!;
@@ -104,11 +185,22 @@ export class BoardView {
     this.memoryTabBtn = this.root.querySelector('[data-tab="memory"]') as HTMLButtonElement;
     this.plotTabBtn = this.root.querySelector('[data-tab="plot"]') as HTMLButtonElement;
     this.ramTabBtn = this.root.querySelector('[data-tab="ram"]') as HTMLButtonElement;
+    this.stepperBar = this.root.querySelector('#step-bar')!;
+    this.stepCounter = this.root.querySelector('#step-count')!;
+    this.btnFirst = this.root.querySelector('[data-step="first"]') as HTMLButtonElement;
+    this.btnPrev = this.root.querySelector('[data-step="prev"]') as HTMLButtonElement;
+    this.btnPlay = this.root.querySelector('[data-step="play"]') as HTMLButtonElement;
+    this.btnLast = this.root.querySelector('[data-step="last"]') as HTMLButtonElement;
 
     this.memoryTabBtn.addEventListener('click', () => this.setTab('memory'));
     this.plotTabBtn.addEventListener('click', () => this.setTab('plot'));
     this.ramTabBtn.addEventListener('click', () => this.setTab('ram'));
+    this.btnFirst.addEventListener('click', () => this.stepFirst());
+    this.btnPrev.addEventListener('click', () => this.stepPrev());
+    this.btnPlay.addEventListener('click', () => this.stepNext());
+    this.btnLast.addEventListener('click', () => this.stepLast());
 
+    this.updateStepper();
     this.renderPlot();
   }
 

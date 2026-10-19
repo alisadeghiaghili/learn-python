@@ -118,8 +118,9 @@ what is simulated:
 
 - `pd.read_csv(name, data)` builds a real DataFrame; the *content* is supplied
   (there is no disk), the *structure* is the lesson.
-- A view mutation is real in-model (it writes the shared buffer); a real
-  `for`-loop is out of the subset (consumption is `next()`-driven and visible).
+- A view mutation is real in-model (it writes the shared buffer). A real
+  `for`/`while` loop *is* in the subset now, and each of its iterations is
+  recorded so the learner can watch it step by step on the canvas (§2.8).
 - Every deep lesson names where the model stops and CPython takes over.
 
 This is a feature, not a defect: it forces the learner to see the object graph,
@@ -196,18 +197,55 @@ Every series ships the same way: **engine → canvas → predicates → tests �
 with `npx tsc --noEmit` + `npm test` (and the browser) green at the end of each
 step. The numpy and pandas series are the two worked references.
 
+### 2.8 The step-recording hook (watch it run)
+
+The canvas is the signature feature, and the one thing a static end-state can't
+teach well is a **loop**. Rather than build a full program-counter interpreter,
+the evaluator records a *trace*: when trace capture is on, after every top-level
+statement and after every loop iteration it appends a `cloneState(state)` snapshot
+to `state.trace` (capped at `TRACE_CAP = 60` frames so a runaway `while` can't
+explode memory; the growing array is stripped out of each clone so frames never
+nest).
+
+- `setTraceEnabled(on)` / `isTraceEnabled()` in `evaluator.ts` toggle capture;
+  the UI turns it on once at startup, so every run is scrubbable.
+- `MemoryState.trace?: MemoryState[]` holds the frames. Frame 0 is the state
+  *before* the run; frame N is after the Nth recorded step.
+- `snapshot()`, goals, and predicates never read `trace` — it is a pure replay
+  aid. `recordStep` is a no-op when capture is off, so tests and the solvability
+  gate are unaffected.
+
+The **stepper** (the transport bar ⏮ ◀ ▶ ⏭ under the board tabs, `src/ui/board.ts`)
+shows up after a run with two or more frames and lets the learner scrub; App paints
+the selected frame through the existing `renderMemory`/`renderRam`. This is what
+makes the `watch-the-loop` level real: the same code runs, and the learner steps
+through it to *see* each iteration change the canvas.
+
 ---
 
 ## 3. The catalog (current)
 
-**55 levels across 13 series.** Series are in teaching order. `band` is the
+**78 levels across 16 series.** Series are in teaching order. `band` is the
 level's ELI band.
+
+The course now opens with **pure Python from zero** — `print`, values, names,
+math, strings, decisions (`if`/`elif`/`else`), and loops (`for`/`range`/
+`while`) — before any memory-model vocabulary. The memory model (names,
+containers, aliasing, copy) is the *second* layer, reached only after the learner
+has felt real control flow. Prerequisites are respected: `functions` (`def`)
+precedes every series that calls a function, and `mutation` (`.append`) precedes
+the aliasing and copy series that mutate lists.
 
 | Series | Title | Levels |
 |--------|-------|--------|
+| `basics` | First Steps | 8 |
+| `flow` | Decisions | 8 |
+| `loops` | Repeating | 7 |
+| `functions` | Functions & Frames | 4 |
 | `names` | Names & Bindings | 5 |
-| `aliasing` | Aliasing & Copy | 4 |
 | `containers` | Containers in Memory | 4 |
+| `mutation` | Mutation & Methods | 4 |
+| `aliasing` | Aliasing & Copy | 4 |
 | `copy-semantics` | Copy Semantics | 3 |
 | `iterators` | Iterators & Iterables | 4 |
 | `functional` | Defaults & Functional | 4 |
@@ -215,11 +253,66 @@ level's ELI band.
 | `pandas` | Pandas: Tables as windows over a buffer | 5 |
 | `asyncio` | Asyncio: Coroutines, Tasks & the Event Loop | 5 |
 | `threading` | Threading: Threads, Shared State & the Data Race | 5 |
-| `mutation` | Mutation & Methods | 4 |
-| `functions` | Functions & Frames | 4 |
 | `plotting` | Plotting & Capstone | 3 |
 
-### Core Python
+### Foundations (from zero)
+
+These three series are pure Python with no memory-model vocabulary: the learner
+writes `print`, names values, does math, and builds strings, then makes decisions
+and repeats. The canvas is present but the story is the code, not the graph.
+
+**`basics` — First Steps**
+
+| id | band | name |
+|----|------|------|
+| `hello-world` | eli5 | Hello, world |
+| `first-variable` | eli5 | Save a value |
+| `change-a-value` | eli5 | Change a value |
+| `do-math` | eli10 | Do some math |
+| `build-up` | eli10 | Build a value up |
+| `your-name` | eli5 | A word in a box |
+| `combine-words` | eli10 | Join two words |
+| `how-long` | eli10 | How long is it? |
+
+**`flow` — Decisions**
+
+| id | band | name |
+|----|------|------|
+| `true-or-false` | eli10 | True or False |
+| `is-equal` | eli10 | Ask if equal |
+| `is-bigger` | eli10 | Bigger or smaller |
+| `first-if` | eli10 | Your first if |
+| `if-else` | eli10 | If … else |
+| `elif-ladder` | eli15 | Picking with elif |
+| `and-or` | eli15 | And, or, not |
+| `membership` | eli15 | Is it in there? |
+
+**`loops` — Repeating**
+
+| id | band | name |
+|----|------|------|
+| `count-with-range` | eli10 | Count with a loop |
+| `range-start-stop` | eli10 | A range with a start |
+| `loop-a-string` | eli10 | Loop over a word |
+| `while-loop` | eli15 | Loop until done |
+| `loop-with-if` | eli15 | Loop plus a decision |
+| `break-out` | eli15 | Stop early with break |
+| `watch-the-loop` | eli15 | Watch the loop run |
+
+`watch-the-loop` leans on the **step-recording hook** (§2.8): after a run the
+learner scrubs the recorded frames with the board's transport controls (⏮ ◀ ▶
+⏭) and watches each loop iteration paint onto the canvas.
+
+### Core Python (the memory model)
+
+**`functions` — Functions & Frames**
+
+| id | band | name |
+|----|------|------|
+| `print-is-not-magic` | eli5 | `print` is not magic |
+| `define-function` | eli10 | Define a function |
+| `call-and-bind` | eli10 | Call and bind |
+| `rebind-in-fn-is-local` | eli20 | Rebind inside a function |
 
 **`names` — Names & Bindings**
 
@@ -231,15 +324,6 @@ level's ELI band.
 | `values-vs-refs` | eli10 | Values vs references |
 | `shared-value` | eli10 | Two names, one value |
 
-**`aliasing` — Aliasing & Copy**
-
-| id | band | name |
-|----|------|------|
-| `two-names-one-list` | eli10 | Two names, one list |
-| `copy-dont-alias` | eli10 | Copy, do not alias |
-| `rebind-vs-mutate` | eli15 | Rebind vs mutate |
-| `identity-is` | eli15 | Identity: `is` |
-
 **`containers` — Containers in Memory**
 
 | id | band | name |
@@ -248,6 +332,24 @@ level's ELI band.
 | `dict-entry` | eli10 | Dict entry |
 | `tuple-identity` | eli10 | Tuple identity |
 | `set-semantics` | eli15 | Set semantics |
+
+**`mutation` — Mutation & Methods**
+
+| id | band | name |
+|----|------|------|
+| `grow-with-append` | eli10 | Grow with `append` |
+| `pop-returns` | eli15 | `pop` returns |
+| `dict-get-safe` | eli15 | Safe `dict.get` |
+| `dict-update-merge` | eli15 | `dict` update / merge |
+
+**`aliasing` — Aliasing & Copy**
+
+| id | band | name |
+|----|------|------|
+| `two-names-one-list` | eli10 | Two names, one list |
+| `copy-dont-alias` | eli10 | Copy, do not alias |
+| `rebind-vs-mutate` | eli15 | Rebind vs mutate |
+| `identity-is` | eli15 | Identity: `is` |
 
 **`copy-semantics` — Copy Semantics**
 
@@ -274,24 +376,6 @@ level's ELI band.
 | `defaultdict-list` | eli15 | Auto-default to a fresh list |
 | `map-lazy` | eli15 | `map`: a lazy transform |
 | `filter-truthy` | eli15 | `filter`: keep what is truthy |
-
-**`mutation` — Mutation & Methods**
-
-| id | band | name |
-|----|------|------|
-| `grow-with-append` | eli10 | Grow with `append` |
-| `pop-returns` | eli15 | `pop` returns |
-| `dict-get-safe` | eli15 | Safe `dict.get` |
-| `dict-update-merge` | eli15 | `dict` update / merge |
-
-**`functions` — Functions & Frames**
-
-| id | band | name |
-|----|------|------|
-| `print-is-not-magic` | eli5 | `print` is not magic |
-| `define-function` | eli10 | Define a function |
-| `call-and-bind` | eli10 | Call and bind |
-| `rebind-in-fn-is-local` | eli20 | Rebind inside a function |
 
 **`plotting` — Plotting & Capstone**
 

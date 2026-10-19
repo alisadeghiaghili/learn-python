@@ -391,6 +391,68 @@ button.ghost,
   font-size: 14px;
 }
 
+/* "Watch it run" stepper: appears under the tabs when a run was recorded. */
+.step-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.step-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--haze);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-right: 2px;
+}
+
+.step-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1;
+  width: 30px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-btn:hover:not(:disabled) {
+  border-color: var(--amber);
+}
+
+.step-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* `display: flex` above would otherwise override the `hidden` attribute. */
+.step-bar[hidden] {
+  display: none;
+}
+
+.step-btn.play {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.step-count {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--haze);
+  margin-left: 4px;
+  min-width: 52px;
+  text-align: right;
+}
+
 .board-body {
   flex: 1;
   min-height: 0;
@@ -1203,7 +1265,7 @@ button.ghost,
 
 .level-row {
   display: grid;
-  grid-template-columns: auto 1fr auto auto;
+  grid-template-columns: auto 1fr auto auto auto;
   gap: 10px;
   align-items: center;
   border: 1px solid var(--line);
@@ -1212,6 +1274,26 @@ button.ghost,
   background: var(--bg);
   text-align: start;
   width: 100%;
+}
+
+.level-row.start-here {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+}
+
+/* difficulty dots (●●●○○) in the level map */
+.level-row .diff,
+.legend-list .diff {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--amber);
+  user-select: none;
+  white-space: pre;
+}
+
+/* the "start here" ▶ marker in the legend */
+.legend-list .start-mark {
+  color: var(--ok);
+  font-weight: 700;
 }
 
 .level-row:hover {
@@ -1384,12 +1466,13 @@ button.ghost,
     grid-template-areas:
       'id chip'
       'name name'
-      'par par';
+      'diff par';
     gap: 6px 10px;
   }
 
   .level-row .id { grid-area: id; }
   .level-row .name { grid-area: name; }
-  .level-row .par-note { grid-area: par; }
+  .level-row .diff { grid-area: diff; }
+  .level-row .par-note { grid-area: par; justify-self: end; }
   .level-row .chip { grid-area: chip; justify-self: end; }
 }
