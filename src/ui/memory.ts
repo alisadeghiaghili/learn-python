@@ -455,6 +455,19 @@ export function renderRam(svg: SVGSVGElement, state: MemoryState, liveIds: strin
   addText(svg, COL_REF, 18, 'REFC', COLORS.muted, 10, 'start', 'middle', mono);
   addText(svg, COL_VALUE, 18, 'VALUE', COLORS.muted, 10, 'start', 'middle', mono);
 
+  // Empty-state: nothing allocated on the heap yet. Small numbers, booleans,
+  // and None live directly in the stack frame, so `x = 1` shows nothing here —
+  // a beginner needs to know that's expected, not a bug.
+  if (ids.length === 0) {
+    addText(svg, HEADER_X, 70, 'Nothing on the heap yet.', COLORS.ink, 14, 'start', 'middle');
+    addText(svg, HEADER_X, 94, 'The RAM view lists the objects Python has to allocate memory for — lists,', COLORS.muted, 11, 'start', 'middle', mono);
+    addText(svg, HEADER_X, 112, 'strings, dicts, and the data behind numpy/pandas. Small numbers, True/False,', COLORS.muted, 11, 'start', 'middle', mono);
+    addText(svg, HEADER_X, 130, 'and None are kept right in the stack frame, so `x = 1` won\'t appear here.', COLORS.muted, 11, 'start', 'middle', mono);
+    addText(svg, HEADER_X, 158, 'Find `x` on the Memory tab (in the <module> frame).', COLORS.muted, 11, 'start', 'middle', mono);
+    addText(svg, HEADER_X, 180, 'Try xs = [1, 2] or w = \'hi\' and watch a row appear below.', COLORS.amber, 12, 'start', 'middle', mono);
+    return;
+  }
+
   let y = 34;
   for (const id of ids) {
     const obj = state.heap[id]!;
