@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="learn-python-5">
+  <!-- the memory canvas -->
+  <rect x="14" y="14" width="100" height="100" rx="22" fill="#141a1e" stroke="#33424b" stroke-width="3"/>
+  <!-- the "5" -->
+  <path d="M90 36 H48 V64 C68 60 84 70 84 84 C84 98 72 105 62 103 C56 102 52 98 51 92"
+        fill="none" stroke="#F0A050" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- a reference node at the 5's origin (object-graph motif) -->
+  <circle cx="48" cy="36" r="8" fill="#5bc4b0"/>
+</svg>

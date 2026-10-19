@@ -137,8 +137,8 @@ body {
 
 .nav-toggle {
   display: none;
-  width: 40px;
-  height: 40px;
+  width: 42px;
+  height: 42px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: transparent;
@@ -175,14 +175,14 @@ body {
 }
 
 .nav-drawer button {
-  min-height: 40px;
+  min-height: 36px;
 }
 
 .help-btn {
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-  min-height: 40px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -207,8 +207,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 40px;
-  padding: 8px 12px;
+  min-height: 36px;
+  padding: 7px 12px;
   border-radius: 8px;
   border: 1px solid var(--line);
   background: transparent;
@@ -236,6 +236,7 @@ body {
   justify-content: center;
   width: 40px;
   min-width: 40px;
+  height: 40px;
   padding: 0;
 }
 
@@ -261,9 +262,8 @@ button,
 
 button:hover,
 .btn:hover {
-  border-color: var(--amber);
-  color: var(--amber);
-  background: #222c32;
+  border-color: var(--haze);
+  background: #2a3a4a;
 }
 
 button:focus-visible,
