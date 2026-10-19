@@ -19,6 +19,7 @@ import { escapeHtml, renderMarkdown, showModal, type ModalSpec } from './dialog'
 import { formatVisitorCount, startVisitorCounter } from './visitor-counter';
 import { getLocale, LOCALES, localizeLevel, localizeSequence, setLocale, ui } from '../i18n';
 import type { Locale } from '../i18n';
+import brandLogoUrl from '../../assets/lp5-logo.svg';
 
 const REPO_URL = 'https://github.com/alisadeghiaghili/learn-python';
 const COFFEE_URL = 'https://www.buymeacoffee.com/alisadeghil';
@@ -175,7 +176,7 @@ export class App {
       <div class="app-main">
         <header class="toolbar">
           <a class="brand" href="./" aria-label="learnpython home">
-            <img class="brand-logo" src="assets/lp5-logo.svg" width="22" height="22" alt="" />
+            <img class="brand-logo" src="${brandLogoUrl}" width="22" height="22" alt="" />
             <span class="brand-text">learn<span class="brand-accent">python</span></span>
           </a>
           <div class="level-title" id="level-title"></div>
