@@ -68,8 +68,10 @@ export interface UiCopy {
   tryLabel: string;
   nowChip: string;
   hintLabel: string;
-  bestStatements: (n: number) => string;
-  parStatements: (n: number) => string;
+  bestSoFar: (best: number, par: number) => string;
+  idealSolution: (par: number) => string;
+  youAreLearning: string;
+  fieldNotesTitle: string;
 
   // —— meta commands (typed in the terminal)
   usageLevel: string;

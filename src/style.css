@@ -837,10 +837,7 @@ button.ghost,
 
 .dock h2 {
   margin: 0 0 8px;
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.15;
+  font-size: 14px;
   position: sticky;
   top: 0;
   background: var(--panel);
@@ -970,11 +967,21 @@ button.ghost,
   margin: 0 0 10px;
 }
 
+.field-box {
+  border: 1px solid color-mix(in srgb, var(--teal) 40%, var(--line));
+  background: color-mix(in srgb, var(--teal) 8%, var(--bg));
+  border-radius: 10px;
+  padding: 10px;
+  margin: 0 0 10px;
+}
+
+.field-box ul,
 .learning-box ul {
   margin: 6px 0 0;
   padding-inline-start: 16px;
 }
 
+.field-box li,
 .learning-box li {
   font-size: 12px;
   color: var(--text);

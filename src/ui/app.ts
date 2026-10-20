@@ -649,20 +649,25 @@ export class App {
     this.dockEl.innerHTML = `
       <h2>${escapeHtml(level.name)}</h2>
       <p class="objective">${renderMarkdown(level.brief)}</p>
+      ${level.learning?.length ? `<div class="learning-box">
+        <div class="next-title">${escapeHtml(u.youAreLearning)}</div>
+        <ul>${level.learning.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>
+      </div>` : ''}
+      ${level.fieldNotes?.length ? `<div class="field-box">
+        <div class="next-title">${escapeHtml(u.fieldNotesTitle)}</div>
+        <ul>${level.fieldNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>
+      </div>` : ''}
       <div class="par-note">${this.bestNote(level)}</div>
       ${nextBlock}
       <ul class="goal-list">${items}</ul>
-      ${this.showHint ? `<div class="par-note"><strong>${escapeHtml(ui().hintLabel)}</strong> ${renderMarkdown(level.hint)}</div>` : ''}
+      ${this.showHint ? `<div class="par-note"><strong>${escapeHtml(u.hintLabel)}</strong> ${renderMarkdown(level.hint)}</div>` : ''}
     `;
   }
 
   private bestNote(level: Level): string {
     const u = ui();
-    const prog = this.progress[level.id];
-    if (prog?.bestStatements !== undefined) {
-      return `${u.bestStatements(prog.bestStatements)} · par ${level.par}`;
-    }
-    return u.parStatements(level.par);
+    const best = this.progress[level.id]?.bestStatements;
+    return best !== undefined ? u.bestSoFar(best, level.par) : u.idealSolution(level.par);
   }
 
   /* —— Meta commands —— */
@@ -807,7 +812,7 @@ export class App {
               <span class="chip ${solved ? 'ok' : ''}" title="${escapeHtml(u.legendDifficulty)} ${l.difficulty}/5" aria-label="${escapeHtml(u.legendDifficulty)} ${l.difficulty} / 5">
                 ${solved ? `✓ ${p?.bestStatements ?? l.par}` : `<span class="diff-dots" aria-hidden="true">${renderDiffDots(l.difficulty)}</span>`}
               </span>
-              <span class="par-note">par ${l.par}</span>
+              <span class="par-note">ideal ${l.par} command${l.par === 1 ? '' : 's'}</span>
             </button>`;
           })
           .join('');
@@ -825,7 +830,7 @@ export class App {
           <div class="next-title">${escapeHtml(u.howToRead)}</div>
           <ul class="legend-list">
             <li><span class="diff-dots" aria-hidden="true">${renderDiffDots(3)}</span> ${escapeHtml(u.legendDifficulty)}</li>
-            <li><span class="par-note">par N</span> ${escapeHtml(u.legendPar)}</li>
+            <li><span class="par-note">ideal 3 commands</span> ${escapeHtml(u.legendPar)}</li>
             <li><span class="chip ok">✓ N</span> ${escapeHtml(u.legendSolved)}</li>
             <li><span class="start-mark">▶</span> ${escapeHtml(u.legendStart)}</li>
           </ul>
