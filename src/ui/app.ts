@@ -839,6 +839,13 @@ export class App {
       actions: [{ label: u.close, className: 'ghost', onClick: () => undefined }],
     });
 
+    // showModal focuses the footer button, which the browser scrolls into view —
+    // the tall catalog would land at its bottom. Reset to the top so the first
+    // exercise is what's visible.
+    const panel = modal.el.querySelector<HTMLElement>('.modal');
+    panel?.scrollTo({ top: 0 });
+    requestAnimationFrame(() => panel?.scrollTo({ top: 0 }));
+
     modal.el.querySelectorAll<HTMLButtonElement>('[data-level]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = btn.dataset.level;
