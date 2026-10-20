@@ -73,7 +73,7 @@ export const en: Catalog = {
     legendDifficulty: 'difficulty, 1–5',
     legendStart: 'start here if you are new',
     deepLessonBtn: 'deep lesson',
-    deepLessonTitle: (title) => `Read the full ${title} lesson (ELI5→ELI-PHD)`,
+    deepLessonTitle: (title) => `Read the full ${title} lesson (Beginner→Master)`,
     close: 'Close',
     closePrimary: 'Close',
 

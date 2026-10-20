@@ -36,7 +36,7 @@ export const series: Sequence[] = [
   {
     id: 'numpy',
     title: 'NumPy: Buffers & Views',
-    deepLesson: `## ELI5
+    deepLesson: `## Beginner
 
 A numpy array is like a **frame** you slide over a row of beads. The beads (the
 numbers) sit in one long, unbroken row — that row is the **buffer**. The frame
@@ -46,7 +46,7 @@ row. When you copy, you pour the beads into a brand-new row.
 
 ${schematicBlock(VIEW_VS_COPY)}
 
-## ELI10
+## Intermediate
 
 Two objects, always. \`np.array([1, 2, 3])\` allocates a **buffer** (a flat,
 contiguous run of raw numbers) and an **ndarray** — a *window* (an offset plus a
@@ -60,7 +60,7 @@ window; the window points at the buffer.
 - Because a view shares its buffer, \`v[0] = 9\` writes into the shared run, and
   \`a\` sees the change. A copy, never.
 
-## ELI15
+## Advanced
 
 The mental model that matters in real code: **a slice is a view, not a copy.**
 This is the single most common numpy foot-gun.
@@ -73,7 +73,7 @@ This is the single most common numpy foot-gun.
   new data?* Chaining views is free; chaining real operations is where you pay
   memory.
 
-## ELI20
+## Expert
 
 The memory mechanics, precisely.
 
@@ -90,7 +90,7 @@ The memory mechanics, precisely.
   shows its raw byte cells, and each view paints its \`[offset..offset+shape)\`
   window as a strip aligned to those cells.
 
-## ELI-PHD
+## Master
 
 Where this model pays off and where it breaks.
 

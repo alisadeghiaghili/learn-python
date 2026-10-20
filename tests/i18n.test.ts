@@ -15,7 +15,7 @@ import { fa } from '../src/i18n/fa';
 import { parseSchematic } from '../src/ui/schematic';
 import type { Catalog } from '../src/i18n/types';
 
-const DEEP_LESSON_BANNERS = ['## ELI5', '## ELI10', '## ELI15', '## ELI20'];
+const DEEP_LESSON_BANNERS = ['## Beginner', '## Intermediate', '## Advanced', '## Expert'];
 
 const locales: { name: string; cat: Catalog }[] = [
   { name: 'de', cat: de },

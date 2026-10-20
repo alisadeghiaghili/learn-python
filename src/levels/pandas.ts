@@ -36,7 +36,7 @@ export const series: Sequence[] = [
   {
     id: 'pandas',
     title: 'Pandas: Tables as windows over a buffer',
-    deepLesson: `## ELI5
+    deepLesson: `## Beginner
 
 A pandas table is like a **grid of beads**. All the numbers are poured into one
 long, unbroken row (the **buffer**) — the beads for column 1, then column 2, in
@@ -47,7 +47,7 @@ When you copy, you pour the beads into a brand-new row.
 
 ${schematicBlock(PD_VIEW_VS_COPY)}
 
-## ELI10
+## Intermediate
 
 A **DataFrame** is a window over one buffer, held row-major: row 0's cells, then
 row 1's cells, and so on. A **Series** is the 1-D case — one column, its own
@@ -60,7 +60,7 @@ buffer plus a list of row labels.
   over a row range. No data is copied.
 - Because a view shares its buffer, writing through \`v\` changes \`df\` too.
 
-## ELI15
+## Advanced
 
 The mental model that matters: **\`loc\`/\`iloc\` are views, not copies.** That
 is the pandas identity idea, and it is exactly the numpy lesson lifted to a
@@ -75,7 +75,7 @@ table.
 - So the standing question: *does this expression share my frame's data, or make
   new data?* Slicing is free; a copy is where you pay.
 
-## ELI20
+## Expert
 
 The mechanics, precisely.
 
@@ -89,7 +89,7 @@ The mechanics, precisely.
 - Watch the RAM tab: the buffer row shows the row-major byte cells, and a view
   is a window over that shared run.
 
-## ELI-PHD
+## Master
 
 Where it pays off and where it breaks.
 

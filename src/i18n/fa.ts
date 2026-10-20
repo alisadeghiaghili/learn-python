@@ -77,7 +77,7 @@ export const fa: Catalog = {
     legendDifficulty: 'سختی، ۱ تا ۵',
     legendStart: 'اگر تازه‌واردید از اینجا شروع کنید',
     deepLessonBtn: 'درس عمیق',
-    deepLessonTitle: (title) => `خواندن درس کامل ${title} (ELI5→ELI-PHD)`,
+    deepLessonTitle: (title) => `خواندن درس کامل ${title} (Beginner→Master)`,
     close: 'بستن',
     closePrimary: 'بستن',
 

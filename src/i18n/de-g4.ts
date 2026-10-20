@@ -6,7 +6,7 @@ export const deG4: LevelGroup = {
     pandas: 'Pandas: Tabellen als Fenster über einen Puffer',
   },
   deepLessons: {
-    numpy: `## ELI5
+    numpy: `## Beginner
 
 Ein numpy-Array ist wie ein **Rahmen**, der über eine Reihe von Perlen gleitet.
 Die Perlen (die Zahlen) liegen in einer langen, ununterbrochenen Reihe — diese
@@ -79,7 +79,7 @@ Reihe. Wenn du kopierst, gießt du die Perlen in eine völlig neue Reihe.
 }
 \`\`\`
 
-## ELI10
+## Intermediate
 
 Zwei Objekte, immer. \`np.array([1, 2, 3])\` alloziert einen **Puffer** (eine
 flache, zusammenhängende Kette roher Zahlen) und ein **ndarray** — ein
@@ -95,7 +95,7 @@ auf den Puffer.
 - Weil eine Ansicht ihren Puffer teilt, schreibt \`v[0] = 9\` in dieselbe
   geteilte Kette, und \`a\` sieht die Änderung. Eine Kopie, nie.
 
-## ELI15
+## Advanced
 
 Das mentale Modell, das im echten Code zählt: **ein Slice ist eine Ansicht,
 keine Kopie.** Das ist der häufigste numpy-Fallstrick.
@@ -109,7 +109,7 @@ keine Kopie.** Das ist der häufigste numpy-Fallstrick.
   meine Daten, oder macht er neue?* Ansichten ketteln ist umsonst; Ketten
   echter Operationen ist, wo du Speicher bezahlst.
 
-## ELI20
+## Expert
 
 Die Speicher-Mechanik, präzise.
 
@@ -128,7 +128,7 @@ Die Speicher-Mechanik, präzise.
   \`[offset..offset+shape)\`-Fenster als Schiene, ausgerichtet mit diesen
   Zellen.
 
-## ELI-PHD
+## Master
 
 Wo dieses Modell sich auszahlt und wo es zusammenbricht.
 
@@ -145,7 +145,7 @@ Wo dieses Modell sich auszahlt und wo es zusammenbricht.
   der Zusammenhang will. Das Identitätsbild — geteilter vs. eigener Puffer —
   ist die ganze Entscheidung: Kopiere nur, wenn du die Daten besitzen musst.
 `,
-    pandas: `## ELI5
+    pandas: `## Beginner
 
 Eine pandas-Tabelle ist wie ein **Raster von Perlen**. Alle Zahlen werden in
 eine lange, ununterbrochene Reihe (den **Puffer**) gegossen — die Perlen von
@@ -219,7 +219,7 @@ Reihe. Wenn du kopierst, gießt du die Perlen in eine völlig neue Reihe.
 }
 \`\`\`
 
-## ELI10
+## Intermediate
 
 Ein **DataFrame** ist ein Fenster über einen Puffer, gespeichert row-major:
 die Zellen von Zeile 0, dann die Zellen von Zeile 1, und so weiter. Ein
@@ -234,7 +234,7 @@ von Zeilen-Labels.
 - Weil eine Ansicht ihren Puffer teilt, ändert ein Schreiben über \`v\` auch
   \`df\`.
 
-## ELI15
+## Advanced
 
 Das mentale Modell, das zählt: **\`loc\`/\`iloc\` sind Ansichten, keine
 Kopien.** Das ist die pandas-Identitäts-Idee, und es ist exakt die numpy-
@@ -250,7 +250,7 @@ Lektion, auf eine Tabelle gehoben.
 - Also die ständige Frage: *Teilt dieser Ausdruck die Daten meines Frames,
   oder macht er neue?* Slicen ist umsonst; eine Kopie ist, wo du bezahlst.
 
-## ELI20
+## Expert
 
 Die Mechanik, präzise.
 
@@ -266,7 +266,7 @@ Die Mechanik, präzise.
 - Schau auf den RAM-Tab: Die Puffer-Zeile zeigt die row-major-Byte-Zellen,
   und eine Ansicht ist ein Fenster über dieser geteilten Kette.
 
-## ELI-PHD
+## Master
 
 Wo es sich auszahlt und wo es zusammenbricht.
 

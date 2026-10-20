@@ -26,7 +26,7 @@ const BAND_DIFFICULTY: Record<EliBand, number> = {
 };
 
 /** A per-topic deep lesson must ramp through the core ELI bands. */
-const DEEP_LESSON_BANNERS = ['## ELI5', '## ELI10', '## ELI15', '## ELI20'];
+const DEEP_LESSON_BANNERS = ['## Beginner', '## Intermediate', '## Advanced', '## Expert'];
 
 test('catalog is well-formed: unique ids, valid fields, valid ELI bands', () => {
   const levels = allLevels();

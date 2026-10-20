@@ -6,7 +6,7 @@ export const deG5: LevelGroup = {
     threading: 'Threading: Threads, gemeinsamer Zustand und das Data Race',
   },
   deepLessons: {
-    asyncio: `## ELI5
+    asyncio: `## Beginner
 
 Stell dir **zwei Personen und einen einzigen Herd** vor. Jede Person hat ein
 Rezept, das sagt: „Koch ein wenig, warte, bis das Wasser kocht, und koch dann
@@ -85,7 +85,7 @@ benutzen kann. Das ist alles, was Asyncio ist: Menschen (Coroutinen), die bei
 }
 \`\`\`
 
-## ELI10
+## Intermediate
 
 Eine **Coroutine** ist ein Objekt, das einen *gespeicherten Ort* einer Funktion
 hält. Den Aufruf einer \`async def\` **führt** den Funktionskörper **nicht** aus —
@@ -105,7 +105,7 @@ ist eine Warteschlange aus fertigen (ready) Tasks.
 Nichts blockiert. Ein suspendierter Task ist einfach ein Objekt, das auf der
 Warteschlange des Loops liegt.
 
-## ELI15
+## Advanced
 
 Das mentale Modell: **Der Loop ist eine Round-Robin-Warteschlange aus fertigen
 Tasks, und \`await\` ist der Ort, an dem ein Task wieder in die Warteschlange
@@ -122,7 +122,7 @@ zurückkehrt.** Das ist das gesamte Asyncio-Bild.
   wer läuft in der Lücke?* Jedes \`await\` ist eine Lücke, die der Loop füllen
   kann.
 
-## ELI20
+## Expert
 
 Die Mechanik, präzise.
 
@@ -204,7 +204,7 @@ Die Mechanik, präzise.
 }
 \`\`\`
 
-## ELI-PHD
+## Master
 
 Wo es sich auszahlt und wo dieses Modell endet.
 
@@ -225,7 +225,7 @@ Wo es sich auszahlt und wo dieses Modell endet.
   gemeinsamen Daten abstimmen müssen (diese Serie beschränkt sich auf
   geteilte Lists, damit die Überlagerung lesbar bleibt).
 `,
-    threading: `## ELI5
+    threading: `## Beginner
 
 Stell dir **zwei Kinder und einen Bonbon-Behälter** vor. Die Aufgabe jedes
 Kindes ist: „Schau, wie viele Bonbons im Behälter sind, nimm die Zahl auf, und
@@ -321,7 +321,7 @@ Schild zurücklegt.
 }
 \`\`\`
 
-## ELI10
+## Intermediate
 
 Ein **Thread** ist ein *Aufruf, der an seinem eigenen Ort läuft*, aber dennoch
 den **gleichen Speicher** nutzt wie alle anderen. Ein
@@ -340,7 +340,7 @@ Hier gibt es keine echten OS-Threads oder CPU-Kerne — die *Preemption* wird
 simuliert, und die Überlagerung zeigt sich darin, was der gemeinsame Objekt am
 Ende enthält.
 
-## ELI15
+## Advanced
 
 Das mentale Modell: **Threads teilen sich den Heap, und sie werden nach jeder
 Anweisung preempted.** Diese Preemption ist die ganze Geschichte.
@@ -359,7 +359,7 @@ Anweisung preempted.** Diese Preemption ist die ganze Geschichte.
   einen kritischen Abschnitt (critical section), damit immer nur ein Thread
   darin ist.
 
-## ELI20
+## Expert
 
 Die Mechanik, präzise.
 
@@ -461,7 +461,7 @@ Die Mechanik, präzise.
 }
 \`\`\`
 
-## ELI-PHD
+## Master
 
 Wo es sich auszahlt und wo dieses Modell endet.
 

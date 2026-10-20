@@ -70,7 +70,7 @@ export const series: Sequence[] = [
   {
     id: 'asyncio',
     title: 'Asyncio: Coroutines, Tasks & the Event Loop',
-    deepLesson: `## ELI5
+    deepLesson: `## Beginner
 
 Think of **two people and one stove**. Each person has a recipe that says
 "cook a bit, then wait for the water to boil, then cook a bit more." Nobody
@@ -82,7 +82,7 @@ away at \`await\` so the stove (the loop) can serve everyone fairly.
 
 ${schematicBlock(ASYNC_LOOP_TICK)}
 
-## ELI10
+## Intermediate
 
 A **coroutine** is an object that holds a function's *saved place*. Calling an
 \`async def\` does **not** run the body — it hands you a coroutine (a bookmark on
@@ -98,7 +98,7 @@ page 0 of that function). A **task** is a *named handle* to a coroutine, and the
 
 Nothing blocks. A suspended task is just an object sitting on the loop's queue.
 
-## ELI15
+## Advanced
 
 The mental model: **the loop is a round-robin queue of ready tasks, and \`await\`
 is where a task gets back on the queue.** That is the entire asyncio picture.
@@ -111,7 +111,7 @@ is where a task gets back on the queue.** That is the entire asyncio picture.
 - So the standing question: *when does this task yield, and who runs in the gap?*
   Every \`await\` is a gap the loop can fill.
 
-## ELI20
+## Expert
 
 The mechanics, precisely.
 
@@ -128,7 +128,7 @@ The mechanics, precisely.
 
 ${schematicBlock(ASYNC_TASK_STATES)}
 
-## ELI-PHD
+## Master
 
 Where it pays off and where this model stops.
 

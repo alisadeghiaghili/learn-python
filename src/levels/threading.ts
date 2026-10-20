@@ -78,7 +78,7 @@ export const series: Sequence[] = [
   {
     id: 'threading',
     title: 'Threading: Threads, Shared State & the Data Race',
-    deepLesson: `## ELI5
+    deepLesson: `## Beginner
 
 Imagine **two kids and one jar of candy**. Each kid's job is "look at how many
 pieces are in the jar, take the number, then write the number plus one on the
@@ -91,7 +91,7 @@ has to wait outside until the first puts the sign back.
 
 ${schematicBlock(RACE_LOST_UPDATE)}
 
-## ELI10
+## Intermediate
 
 A **thread** is a *call running in its own place* that still uses the **same
 memory** as everyone else. A **threading.Thread(target, args)** object does not
@@ -107,7 +107,7 @@ run yet — it is a not-started call (like a coroutine object, but for threads).
 There are no real OS threads or CPU cores here — the *preemption* is simulated,
 and the interleaving shows up in what the shared object ends up holding.
 
-## ELI15
+## Advanced
 
 The mental model: **threads share the heap, and they are preempted after every
 statement.** That preemption is the whole story.
@@ -124,7 +124,7 @@ statement.** That preemption is the whole story.
 - A **lock** answers it: \`lk.acquire()\` / \`lk.release()\` wrap a critical
   section so only one thread is inside at a time.
 
-## ELI20
+## Expert
 
 The mechanics, precisely.
 
@@ -145,7 +145,7 @@ The mechanics, precisely.
 
 ${schematicBlock(LOCK_CRITICAL_SECTION)}
 
-## ELI-PHD
+## Master
 
 Where it pays off and where this model stops.
 
