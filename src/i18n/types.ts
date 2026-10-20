@@ -106,9 +106,14 @@ export interface UiCopy {
   deepLessonAction: string;
   deepLessonModalTitle: (title: string) => string;
 
-  // —— help modal
-  helpTitle: string;
-  helpBody: string;
+  // —— help / UI guide (a page map of the app's regions, learn-dvc parity)
+  uiGuideTitle: string;
+  uiHelpMapTitle: string;
+  uiHelpCommands: string;
+  highlightThis: string;
+  useIt: string;
+  /** Per-region docs; each `selector` targets a live region for the highlight tour. */
+  helpSections: { id: string; selector: string; title: string; what: string; how: string }[];
 
   // —— welcome modal
   welcomeTitle: string;

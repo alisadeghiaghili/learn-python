@@ -1335,6 +1335,85 @@ button.ghost,
   font-size: 12px;
 }
 
+/* —— UI guide (the ؟ button): a page map with per-region highlight tour —— */
+.ui-help {
+  display: grid;
+  gap: 12px;
+}
+
+.ui-help-item {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.ui-help-item h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--teal);
+}
+
+.ui-help-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.ui-help-head h3 {
+  margin: 0;
+}
+
+.ui-help-focus {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ui-help-focus:hover {
+  border-color: var(--haze);
+  background: var(--panel-2);
+}
+
+.ui-help-what {
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.ui-help-how {
+  font-size: 12px;
+  color: var(--haze);
+}
+
+/* the region being highlighted during a tour */
+.ui-tour-on {
+  outline: 2px dashed color-mix(in srgb, var(--amber) 70%, transparent) !important;
+  outline-offset: 3px;
+  animation: tour-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tour-pulse {
+  0%, 100% { outline-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+  50% { outline-color: color-mix(in srgb, var(--teal) 75%, transparent); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-tour-on {
+    animation: none;
+    outline: 2px solid var(--amber) !important;
+  }
+}
+
 .series-block {
   margin-bottom: 16px;
 }

@@ -87,28 +87,73 @@ export const de: Catalog = {
     deepLessonAction: 'Tiefe Lektion',
     deepLessonModalTitle: (title) => `${title} — tiefe Lektion`,
 
-    helpTitle: 'Hilfe',
-    helpBody: `### Befehlsreferenz
-
-| Befehl | Wirkung |
-|---|---|
-| \`levels\` | Level-Katalog öffnen |
-| \`lesson\` | Aktuelles Level erklären |
-| \`hint\` | Tipp des Levels zeigen |
-| \`solution\` | Ziellösung zeigen |
-| \`undo\` | Letztes Statement entfernen |
-| \`reset\` | Umgebung leeren |
-| \`sandbox\` | Offenen Sandbox-Modus öffnen |
-| \`clear\` | Konsolen-Protokoll leeren |
-| \`script\` | Mehrzeiliger Skript-Editor ein/aus |
-| \`local\` | Anleitung zur lokalen Python-Einrichtung |
-
-### Ausführung
-- Tippe an der Konsolen-Aufforderung und drücke **Enter**.
-- **Tab** wechselt durch Autovervollständigungen.
-- **Alt + -** fügt ein Leerzeichen um \` = \` ein.
-- Drücke im Skript-Editor **Strg / Cmd + Enter**, um auszuführen.
-`,
+    uiGuideTitle: 'UI-Führer — was jeder Teil macht',
+    uiHelpMapTitle: 'Seitenplan — was jeder UI-Bereich tut',
+    uiHelpCommands: 'Befehle: `help` · `levels` · `lesson` · `hint` · `solution` · `undo` · `reset`',
+    highlightThis: 'Hervorheben',
+    useIt: 'Nutzung:',
+    helpSections: [
+      {
+        id: 'level-title',
+        selector: '.level-title',
+        title: 'Aktuelle Level-Leiste',
+        what: 'Zeigt die Level-Nummer und den Namen, z. B. **Level 1 · Hello, world**.',
+        how: 'Lies sie, um zu sehen, wo du im Kurs bist.',
+      },
+      {
+        id: 'menu',
+        selector: '.nav-toggle',
+        title: 'Menü (≡)',
+        what:
+          'Öffnet die Aktionstasten: **Level** (der gesamte Katalog), **Lektion** (Lehre dieses Levels erneut abspielen), **Leitfaden**, **Tipp**, **Lösung**, **Rückgängig**, **Zurücksetzen**, **Sandbox** und **Hilfe** (dieser Führer).',
+        how: 'Tippe darauf, um die Tasten zu zeigen — **Level** ist die komplette Kurskarte.',
+      },
+      {
+        id: 'board',
+        selector: '.board-tabs',
+        title: 'Board-Tabs — Memory / Plot / RAM',
+        what:
+          'Drei Linsen auf denselben Lauf: **Memory** ist der Live-Objektgraph (Stack-Frames, Heap, bernsteinfarbene Referenzkanten), **RAM** die Speicherkarte (Adressen, Bytes, Referenzzahlen), **Plot** für die Plotting-Level.',
+        how: 'Wechsle die Tabs, um dasselbe aus einem anderen Winkel zu sehen.',
+      },
+      {
+        id: 'canvas',
+        selector: '.board-body',
+        title: 'Das Canvas',
+        what: 'Dort, wo Python vor deinen Augen läuft: Namen, Objekte und die Referenzen zwischen ihnen, live gezeichnet.',
+        how: 'Beobachte es nach jedem Statement.',
+      },
+      {
+        id: 'step',
+        selector: '#step-bar',
+        title: 'Schritt-Leiste — eine Schleife sehen',
+        what: 'Nach einem Lauf ⏮ ◀ ▶ ⏭ das Programm auf dem Canvas Schritt für Schritt abspielen.',
+        how: 'Auf den Schleifen-Level `for` / `while` über die Daten laufen sehen.',
+      },
+      {
+        id: 'terminal',
+        selector: '#terminal',
+        title: 'Konsole',
+        what:
+          'Tippe Python hier ein und drücke **Enter**. **Tab** vervollständigt; die Konsole nimmt auch Meta-Befehle wie `levels`, `hint`, `solution`, `undo`, `reset` an.',
+        how: 'Hier löst du das Level tatsächlich.',
+      },
+      {
+        id: 'dock',
+        selector: '.dock',
+        title: 'Leitfaden-Panel (rechts, immer sichtbar)',
+        what:
+          'Der Live-Begleiter: was du lernst, Feldnotizen, die ideale Befehlzahl und eine Schritt-für-Schritt-Checkliste mit dem aktuellen, hervorgehobenen Schritt.',
+        how: 'Behalte es beim Tippen im Blick; **Tipp** gibt Hilfe, wenn du feststeckst.',
+      },
+      {
+        id: 'links',
+        selector: 'a.tb-link',
+        title: 'GitHub & Unterstützung',
+        what: 'Quellcode-Repository und die Buy-Me-A-Coffee-Seite des Verfassers.',
+        how: 'Beide öffnen sich in einem neuen Tab.',
+      },
+    ],
 
     welcomeTitle: 'Willkommen bei learnpython',
     welcomeBody: `Lerne Python **von null** — einen kleinen Schritt nach dem anderen — und sieh es arbeiten.

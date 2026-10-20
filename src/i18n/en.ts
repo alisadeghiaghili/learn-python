@@ -83,28 +83,74 @@ export const en: Catalog = {
     deepLessonAction: 'Deep lesson',
     deepLessonModalTitle: (title) => `${title} — deep lesson`,
 
-    helpTitle: 'Help',
-    helpBody: `### Command Reference
-
-| Command | Effect |
-|---|---|
-| \`levels\` | Open the level catalog |
-| \`lesson\` | Explain the current level |
-| \`hint\` | Reveal the level hint |
-| \`solution\` | Show the target solution |
-| \`undo\` | Remove the last statement |
-| \`reset\` | Clear the environment |
-| \`sandbox\` | Enter open sandbox mode |
-| \`clear\` | Clear the console log |
-| \`script\` | Toggle the multi-line script editor |
-| \`local\` | Local Python setup guide |
-
-### Execution
-- Type in the console prompt and press **Enter**.
-- **Tab** cycles through autocomplete suggestions.
-- **Alt + -** inserts a spaced \` = \`.
-- Press **Ctrl / Cmd + Enter** in the script editor to run.
-`,
+    uiGuideTitle: 'UI guide — what each part does',
+    uiHelpMapTitle: 'Page map — what each UI region does',
+    uiHelpCommands: 'Commands: `help` · `levels` · `lesson` · `hint` · `solution` · `undo` · `reset`',
+    highlightThis: 'Highlight',
+    useIt: 'Use it:',
+    helpSections: [
+      {
+        id: 'level-title',
+        selector: '.level-title',
+        title: 'Current level strip',
+        what: 'Shows the level number and name you are on, e.g. **Level 1 · Hello, world**.',
+        how: 'Read it to confirm where you are in the course.',
+      },
+      {
+        id: 'menu',
+        selector: '.nav-toggle',
+        title: 'Menu (≡)',
+        what:
+          'Opens the action buttons: **Levels** (the whole catalog), **Lesson** (replay this level’s teaching), **Guide**, **Hint**, **Solution**, **Undo**, **Reset**, **Sandbox**, and **Help** (this guide).',
+        how: 'Tap it to reveal the buttons — **Levels** is the full course map.',
+      },
+      {
+        id: 'board',
+        selector: '.board-tabs',
+        title: 'Board tabs — Memory / Plot / RAM',
+        what:
+          'Three lenses on the same run. **Memory** is the live object graph (stack frames, heap, amber reference edges); **RAM** is the memory map (addresses, bytes, refcounts); **Plot** is for the plotting levels.',
+        how: 'Switch tabs to look at the same data from a different angle.',
+      },
+      {
+        id: 'canvas',
+        selector: '.board-body',
+        title: 'The canvas',
+        what:
+          'Where Python runs in front of you: names, objects and the references between them, drawn live as you type.',
+        how: 'Watch it change after every statement you run.',
+      },
+      {
+        id: 'step',
+        selector: '#step-bar',
+        title: 'Step bar — watch a loop',
+        what: 'After a run, ⏮ ◀ ▶ ⏭ replay the program one step at a time on the canvas.',
+        how: 'Use it on the loop levels to see a `for` / `while` tick over the data.',
+      },
+      {
+        id: 'terminal',
+        selector: '#terminal',
+        title: 'Console',
+        what:
+          'Type Python here and press **Enter**. **Tab** autocompletes; the console also takes meta commands like `levels`, `hint`, `solution`, `undo`, `reset`.',
+        how: 'This is where you actually solve the level.',
+      },
+      {
+        id: 'dock',
+        selector: '.dock',
+        title: 'Guide panel (right, always on)',
+        what:
+          'The live coach: what you are learning, field notes, the ideal command count, and a per-step checklist with the current step highlighted.',
+        how: 'Keep it in view while you type; **Hint** reveals help when you are stuck.',
+      },
+      {
+        id: 'links',
+        selector: 'a.tb-link',
+        title: 'GitHub & support',
+        what: 'Source repository and the Buy-Me-A-Coffee page for the publisher.',
+        how: 'Both open in a new tab.',
+      },
+    ],
 
     welcomeTitle: 'Welcome to learnpython',
     welcomeBody: `Learn Python **from zero**, one small step at a time — and watch it work.

@@ -16,6 +16,7 @@ import { BoardView } from './board';
 import { TerminalView } from './terminal';
 import { ScriptEditorView } from './editor';
 import { escapeHtml, renderMarkdown, showModal, type ModalSpec } from './dialog';
+import { startUiTour, uiHelpModalHtml } from './ui-help';
 import { formatVisitorCount, startVisitorCounter } from './visitor-counter';
 import { getLocale, LOCALES, localizeLevel, localizeSequence, setLocale, ui } from '../i18n';
 import type { Locale } from '../i18n';
@@ -124,6 +125,8 @@ export class App {
   private showHint = false;
   private progress: Progress = loadProgress();
   private checkResults: DockCheck[] = [];
+  /** Reopens the UI guide after a highlight tour finishes (see openUiHelp). */
+  private helpReopenTimer: number | null = null;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -276,7 +279,7 @@ export class App {
         if (action === 'reset') this.reset();
         if (action === 'sandbox') this.enterSandbox();
         if (action === 'local-setup') this.openLocalGuide();
-        if (action === 'help') this.openHelp();
+        if (action === 'help') this.openUiHelp(true);
         this.terminal.focus();
       });
     });
@@ -681,7 +684,7 @@ export class App {
     const [cmd, ...rest] = source.split(/\s+/);
     switch (cmd) {
       case 'help':
-        this.openHelp();
+        this.openUiHelp(false);
         return;
       case 'levels':
         this.openLevels();
@@ -912,12 +915,33 @@ export class App {
     });
   }
 
-  private openHelp(): void {
-    const u = ui();
-    showModal({
-      title: u.helpTitle,
-      bodyHtml: renderMarkdown(u.helpBody),
-      actions: [{ label: u.close, onClick: () => undefined }],
+  /** Explain every on-screen region; optional highlight tour. */
+  private openUiHelp(runTour = false): void {
+    if (runTour) startUiTour(this.root);
+    const modal = showModal({
+      title: ui().uiGuideTitle,
+      bodyHtml: uiHelpModalHtml(),
+      actions: [{ label: ui().close, className: 'ghost', onClick: () => modal.close() }],
+      onClose: () => {
+        if (this.helpReopenTimer !== null) {
+          window.clearTimeout(this.helpReopenTimer);
+          this.helpReopenTimer = null;
+        }
+        this.terminal.focus();
+      },
+    });
+    modal.el.querySelectorAll<HTMLButtonElement>('[data-focus-id]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.focusId;
+        if (!id) return;
+        modal.close();
+        startUiTour(this.root, id, 3000);
+        if (this.helpReopenTimer !== null) window.clearTimeout(this.helpReopenTimer);
+        this.helpReopenTimer = window.setTimeout(() => {
+          this.helpReopenTimer = null;
+          this.openUiHelp(false);
+        }, 3000);
+      });
     });
   }
 
