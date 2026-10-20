@@ -10,6 +10,101 @@
 import type { MemoryState, PlotSpec } from '../engine/types';
 import { escapeHtml } from './dialog';
 
+// Plot palette mirrors the memory canvas (memory.ts) so the two lenses read as
+// one board: amber = data, teal = the fitted trend, muted ink for axes/labels.
+const PLOT = {
+  ink: '#E7EEF2',
+  muted: '#8FA0A8',
+  amber: '#F0A050',
+  teal: '#5BC4B0',
+  line: '#2A353B',
+};
+const PLOT_MONO = 'IBM Plex Mono, monospace';
+const PLOT_SANS = 'IBM Plex Sans, sans-serif';
+
+/** Shorten an axis value for a tick label without losing its meaning. */
+function fmtTick(n: number): string {
+  if (!isFinite(n)) return '';
+  const abs = Math.abs(n);
+  if (abs >= 10000 || (abs > 0 && abs < 0.01)) return n.toExponential(1);
+  return String(Math.round(n * 100) / 100);
+}
+
+/**
+ * Render one plot spec as a self-contained SVG: light grid, labelled axes, and
+ * the series (amber dots for `scatter`, a teal polyline for `line`). Returns the
+ * full `<svg>` markup — no live DOM, so it composes safely into innerHTML.
+ */
+function plotSvg(spec: PlotSpec): string {
+  const W = 480;
+  const H = 360;
+  const m = { l: 52, r: 18, t: 32, b: 42 };
+  const px0 = m.l;
+  const px1 = W - m.r;
+  const py0 = H - m.b;
+  const py1 = m.t;
+  const pts = spec.points;
+
+  // Data bounds, padded 8% so points never sit on the axis edges.
+  let xmin = Infinity;
+  let xmax = -Infinity;
+  let ymin = Infinity;
+  let ymax = -Infinity;
+  for (const [x, y] of pts) {
+    if (x < xmin) xmin = x;
+    if (x > xmax) xmax = x;
+    if (y < ymin) ymin = y;
+    if (y > ymax) ymax = y;
+  }
+  if (pts.length === 0) {
+    xmin = 0; xmax = 1; ymin = 0; ymax = 1;
+  }
+  if (xmax === xmin) { xmin -= 1; xmax += 1; }
+  if (ymax === ymin) { ymin -= 1; ymax += 1; }
+  const padX = (xmax - xmin) * 0.08;
+  const padY = (ymax - ymin) * 0.08;
+  xmin -= padX; xmax += padX;
+  ymin -= padY; ymax += padY;
+
+  const sx = (x: number) => px0 + ((x - xmin) / (xmax - xmin)) * (px1 - px0);
+  const sy = (y: number) => py0 - ((y - ymin) / (ymax - ymin)) * (py0 - py1);
+
+  // Faint gridlines + tick labels, evenly spaced across the padded range.
+  const TICKS = 5;
+  let grid = '';
+  let ticks = '';
+  for (let i = 0; i < TICKS; i++) {
+    const fx = xmin + ((xmax - xmin) * i) / (TICKS - 1);
+    const fy = ymin + ((ymax - ymin) * i) / (TICKS - 1);
+    const X = sx(fx).toFixed(1);
+    const Y = sy(fy).toFixed(1);
+    grid += `<line x1="${X}" y1="${py1}" x2="${X}" y2="${py0}" stroke="${PLOT.line}" stroke-width="1"/>`;
+    grid += `<line x1="${px0}" y1="${Y}" x2="${px1}" y2="${Y}" stroke="${PLOT.line}" stroke-width="1"/>`;
+    ticks += `<text x="${X}" y="${py0 + 18}" fill="${PLOT.muted}" font-size="11" text-anchor="middle" font-family="${PLOT_MONO}">${fmtTick(fx)}</text>`;
+    ticks += `<text x="${px0 - 8}" y="${Number(Y) + 4}" fill="${PLOT.muted}" font-size="11" text-anchor="end" font-family="${PLOT_MONO}">${fmtTick(fy)}</text>`;
+  }
+
+  // The series: a connected teal line (with node markers) or amber dots.
+  let series = '';
+  if (spec.kind === 'line' && pts.length >= 2) {
+    const d = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${sx(x).toFixed(1)},${sy(y).toFixed(1)}`).join(' ');
+    series += `<path d="${d}" fill="none" stroke="${PLOT.teal}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    series += pts.map(([x, y]) => `<circle cx="${sx(x).toFixed(1)}" cy="${sy(y).toFixed(1)}" r="3.5" fill="${PLOT.teal}"/>`).join('');
+  } else {
+    series = pts.map(([x, y]) => `<circle cx="${sx(x).toFixed(1)}" cy="${sy(y).toFixed(1)}" r="4.5" fill="${PLOT.amber}" fill-opacity="0.9" stroke="#0b0f12" stroke-width="1"/>`).join('');
+  }
+
+  const axes =
+    `<line x1="${px0}" y1="${py0}" x2="${px1}" y2="${py0}" stroke="${PLOT.muted}" stroke-width="1.5"/>` +
+    `<line x1="${px0}" y1="${py1}" x2="${px0}" y2="${py0}" stroke="${PLOT.muted}" stroke-width="1.5"/>`;
+
+  const title = spec.title
+    ? `<text x="${(px0 + px1) / 2}" y="20" fill="${PLOT.ink}" font-size="13" text-anchor="middle" font-family="${PLOT_SANS}" font-weight="600">${escapeHtml(spec.title)}</text>`
+    : '';
+
+  return `<svg class="plot-svg" viewBox="0 0 ${W} ${H}" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${escapeHtml(spec.title || spec.kind)}">${title}${grid}${axes}${ticks}${series}</svg>`;
+}
+
 export type BoardTab = 'memory' | 'plot' | 'ram';
 
 export class BoardView {
@@ -211,9 +306,10 @@ export class BoardView {
         '<div class="board-empty"><p>No plot yet. Call <code>scatter(x, y)</code> or <code>line(x, y)</code> to draw one.</p></div>';
       return;
     }
-    // Phase C fills this with real SVG. For now render the spec as a list.
+    // Draw every plot as a real SVG chart (scatter = dots, line = connected
+    // trend). Each keeps its title so the student can see what they plotted.
     const items = this.plots
-      .map((p) => `<div class="plot-card"><strong>${escapeHtml(p.title || p.kind)}</strong> · ${p.points.length} points</div>`)
+      .map((p) => `<figure class="plot-card">${plotSvg(p)}</figure>`)
       .join('');
     this.plotBody.innerHTML = `<div class="plot-cards">${items}</div>`;
   }

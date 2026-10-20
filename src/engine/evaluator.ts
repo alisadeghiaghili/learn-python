@@ -25,7 +25,15 @@ export function run(source: string, state: MemoryState): MemoryState {
     if (traceEnabled) state.trace = [cloneState(state)]; // frame 0: state before running
     const ast = parse(source);
     for (const stmt of ast) {
-      execStatement(stmt, state);
+      if (stmt.kind === 'ExprStatement') {
+        // REPL-style: a bare top-level expression shows its value. `print()`
+        // and mutating calls like `a.append(..)` return None, so they stay
+        // silent (they already spoke for themselves, or have no value).
+        const result = evalExpr(stmt.expr, state);
+        if (result !== null) state.stdout.push(displayValue(result, state));
+      } else {
+        execStatement(stmt, state);
+      }
       recordStep(state); // after each top-level statement
     }
     // A nested child may have been mutated in place (e.g. a[1].append(3)),

@@ -599,16 +599,23 @@ button.ghost,
 .plot-cards {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
   width: 100%;
+  max-width: 560px;
 }
 
 .plot-card {
+  margin: 0;
   border: 1px solid var(--line);
-  background: var(--panel);
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 13px;
+  background: #10161a;
+  border-radius: 12px;
+  padding: 8px 10px 10px;
+}
+
+.plot-card .plot-svg {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .plot-canvas-img {
