@@ -369,7 +369,7 @@ export interface Sequence {
   title: string;
   levels: Level[];
   /**
-   * The per-topic deep lesson that ramps ELI5→ELI-PHD and carries the full
+   * The per-topic deep lesson that ramps Beginner→Master and carries the full
    * professional coverage for the series. Rendered in the lesson panel.
    */
   deepLesson?: string;
