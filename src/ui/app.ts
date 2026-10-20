@@ -25,6 +25,12 @@ const REPO_URL = 'https://github.com/alisadeghiaghili/learn-python';
 const COFFEE_URL = 'https://www.buymeacoffee.com/alisadeghil';
 const PROGRESS_KEY = 'learn-python-progress-v1';
 
+/** Five equal-size dots; filled count = difficulty 1–5. */
+function renderDiffDots(difficulty: number): string {
+  const n = Math.max(0, Math.min(5, difficulty));
+  return Array.from({ length: 5 }, (_, i) => `<i class="diff-dot${i < n ? ' on' : ''}"></i>`).join('');
+}
+
 interface UndoEntry {
   state: MemoryState;
   statementsUsed: number;
@@ -786,8 +792,6 @@ export class App {
   private openLevels(): void {
     const u = ui();
     const firstId = allLevels()[0]?.id;
-    const diffDots = (n: number): string =>
-      '●'.repeat(n) + '○'.repeat(5 - n);
     const body = sequences
       .map((raw) => {
         const s = localizeSequence(raw);
@@ -800,9 +804,10 @@ export class App {
             return `<button type="button" class="level-row ${solved ? 'solved' : ''}${active ? ' active' : ''}${isStart ? ' start-here' : ''}" data-level="${l.id}">
               <span class="id">${isStart ? '▶ ' : ''}${escapeHtml(l.id)}</span>
               <span class="name">${escapeHtml(l.name)}</span>
-              <span class="diff" title="${escapeHtml(u.legendDifficulty)} ${l.difficulty}/5" aria-label="${escapeHtml(u.legendDifficulty)} ${l.difficulty} / 5">${diffDots(l.difficulty)}</span>
+              <span class="chip ${solved ? 'ok' : ''}" title="${escapeHtml(u.legendDifficulty)} ${l.difficulty}/5" aria-label="${escapeHtml(u.legendDifficulty)} ${l.difficulty} / 5">
+                ${solved ? `✓ ${p?.bestStatements ?? l.par}` : `<span class="diff-dots" aria-hidden="true">${renderDiffDots(l.difficulty)}</span>`}
+              </span>
               <span class="par-note">par ${l.par}</span>
-              <span class="chip ${solved ? 'ok' : ''}">${solved ? `✓ ${p?.bestStatements ?? l.par}` : l.par}</span>
             </button>`;
           })
           .join('');
@@ -819,9 +824,9 @@ export class App {
         <div class="legend-box">
           <div class="next-title">${escapeHtml(u.howToRead)}</div>
           <ul class="legend-list">
+            <li><span class="diff-dots" aria-hidden="true">${renderDiffDots(3)}</span> ${escapeHtml(u.legendDifficulty)}</li>
             <li><span class="par-note">par N</span> ${escapeHtml(u.legendPar)}</li>
             <li><span class="chip ok">✓ N</span> ${escapeHtml(u.legendSolved)}</li>
-            <li><span class="diff">●●●○○</span> ${escapeHtml(u.legendDifficulty)}</li>
             <li><span class="start-mark">▶</span> ${escapeHtml(u.legendStart)}</li>
           </ul>
         </div>
