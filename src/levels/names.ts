@@ -14,17 +14,17 @@ export const series: Sequence[] = [
         id: 'first-name',
         eli: 'eli5',
         name: 'First name',
-        brief: 'Bind the name `x` to the integer 3. Names live in the stack frame; small integers live as values, not heap boxes.',
+        brief: 'Bind the name `x` to the integer 3. A name is a label that points at an object; the canvas draws small ints right next to the name to keep the picture simple.',
         hint: 'x = 3',
         start: '',
         par: 1,
         difficulty: 1,
         goal: { type: 'vars', vars: { x: { type: 'int', repr: '3' } } },
         solution: 'x = 3',
-        lesson: `A *name* is a label that points at a value. Writing \`x = 3\` creates the name \`x\` in the current stack frame and makes it refer to the integer 3.
+        lesson: `A *name* is a label that points at an object. Writing \`x = 3\` creates the name \`x\` in the current stack frame and makes it refer to the integer 3.
 
-Small integers like 3 are stored **directly in the frame** — you will not see a box on the heap for them. The name is not a little box containing the number; it is a tag on the number itself.`,
-        learning: ['A name lives in the stack frame, not on the heap', 'Small ints are values, stored directly in the frame'],
+In real Python the 3 is an object too (try \`id(x)\`). This canvas draws small immutable values, such as ints, **directly in the frame** instead of as heap boxes. That is a display simplification, not a claim that ints are not objects. The name is not a little box containing the number; it is a tag on the number itself.`,
+        learning: ['A name lives in the stack frame, not on the heap', 'Every name points at an object; the canvas draws small ints inline to keep the picture readable'],
         fieldNotes: ['Name binding is O(1) — a single table lookup', 'Python names are case-sensitive: `X` and `x` are different'],
       },
       {
@@ -67,8 +67,8 @@ Watch the canvas: the frame shows \`xs\` with a small arrow to a teal box on the
       {
         id: 'values-vs-refs',
         eli: 'eli10',
-        name: 'Values vs references',
-        brief: 'In one frame, hold both a value and a reference: `x` is the int 3, `xs` is a list. See the contrast on the canvas.',
+        name: 'Immutable vs mutable',
+        brief: 'In one frame, hold both an immutable int and a mutable list: `x` is 3, `xs` is `[1, 2]`. Compare how the canvas draws them.',
         hint: 'x = 3 and xs = [1, 2]',
         start: '',
         par: 2,
@@ -78,17 +78,17 @@ Watch the canvas: the frame shows \`xs\` with a small arrow to a teal box on the
           vars: { x: { type: 'int', repr: '3' }, xs: { type: 'list', repr: '[1, 2]' } },
         },
         solution: 'x = 3\nxs = [1, 2]',
-        lesson: `Put both kinds of binding in one frame. \`x = 3\` is a **value** (no heap box); \`xs = [1, 2]\` is a **reference** (arrow to a heap list).
+        lesson: `Put both kinds of object in one frame. Both names are references: \`x\` points at the int 3, \`xs\` points at a list.
 
-The visualizer keeps this distinction visible: \`x\` sits alone in the frame, while \`xs\` carries an amber edge to a box. When you copy a value you copy the number; when you copy a reference you copy the arrow.`,
-        learning: ['Values are stored in the frame; references point at the heap', 'Copying a value vs copying a reference are different operations'],
-        fieldNotes: ['NumPy/`dataclasses` lean on this value-vs-reference split', 'Strings in CPython are immutable value-like objects'],
+The difference that matters is **mutability**. An int can never change in place, so the canvas draws it inline next to its name and nothing is lost. A list can change in place, so it gets its own heap box: that is how you will see several names sharing one list. When you copy a name you always copy the arrow. With an immutable object that is harmless; with a mutable one it is the source of aliasing bugs.`,
+        learning: ['Every name holds a reference; what differs is whether the object can change in place', 'The canvas draws immutable ints inline and mutable lists as heap boxes'],
+        fieldNotes: ['Mutable vs immutable is the split that decides whether sharing an object is risky', 'Strings are immutable objects, like ints'],
       },
       {
         id: 'shared-value',
         eli: 'eli10',
         name: 'Two names, one value',
-        brief: 'Bind `a = 3`, then `b = a`. Unlike a list, `b` gets its own copy of the value 3 — there is no shared box.',
+        brief: 'Bind `a = 3`, then `b = a`. Both names now point at the same int object. Because an int can never change in place, sharing it is harmless.',
         hint: 'a = 3 then b = a',
         start: '',
         par: 2,
@@ -98,10 +98,10 @@ The visualizer keeps this distinction visible: \`x\` sits alone in the frame, wh
           vars: { a: { type: 'int', repr: '3' }, b: { type: 'int', repr: '3' } },
         },
         solution: 'a = 3\nb = a',
-        lesson: `For a small int, \`b = a\` copies the **value**, not a reference. Both names point at the number 3, but there is no heap object connecting them.
+        lesson: `\`b = a\` never copies anything: it makes \`b\` point at the same object as \`a\`. Here that object is the int 3, so both names refer to it (the \`identity-is\` level shows how to check this with \`is\`).
 
-Compare this with a list (next series): for a list, \`b = a\` shares one object. Whether an assignment shares or copies depends entirely on whether the value is a heap object.`,
-        learning: ['Assigning a value copies the value', 'Assigning a reference copies the arrow'],
+This is the same rule as for a list in the next series. The difference is that an int cannot be changed in place, so sharing it can never surprise you. The canvas shows no shared box only because it draws small ints inline.`,
+        learning: ['`b = a` always shares the object; it never copies', 'Sharing an immutable object is harmless: it cannot change underneath you'],
         fieldNotes: ['This is why you can “rebind” an int freely without side effects', 'Immutable values make for safe defaults in function signatures'],
       },
     ],
