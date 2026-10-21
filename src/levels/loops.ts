@@ -57,7 +57,7 @@ Remember: the stop value is *not* included. That “start here, stop before ther
         eli: 'eli10',
         name: 'Loop over a word',
         brief: 'Count how many letters are in `python` using a loop. Save the count in `count`.',
-        hint: 'count = 0\nfor ch in python:\n    count = count + 1',
+        hint: 'count = 0\nfor ch in word:\n    count = count + 1',
         start: "word = 'python'",
         par: 4,
         difficulty: 2,
