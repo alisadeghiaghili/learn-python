@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@types/node": "^26.6.5",
     "typescript": "^5.8.3",
     "vite": "^6.2.1",
     "vitest": "^3.0.8"

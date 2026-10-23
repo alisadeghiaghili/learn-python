@@ -54,6 +54,8 @@ No counterexample was found for any of these at the assessment date:
 
 As of `d222b36` (details and repro steps live in the errata log):
 
+> Status update 2026-10-24 (Phase 1): Differential harness established (`tests/differential/`). 78 level solutions and 67 semantic probes wired against real CPython >= 3.12. 13 levels with invalid CPython syntax/APIs (asyncio `await None`, threading positional `Thread`, bare `scatter`) identified and tracked for Phase 4 remediation; 37 engine discrepancies identified and tracked for Phase 2 engine fixes.
+
 | Gap | Best-in-class reference | Consequence |
 |---|---|---|
 | Not real Python; small grammar (no unpacking, kwargs/defaults, comprehensions, f-strings, classes, exceptions, `not in`) | Python Tutor, futurecoder, memory_graph | Learners hit the subset wall within minutes |
@@ -100,6 +102,8 @@ As of `d222b36` (details and repro steps live in the errata log):
 ## 7. Success measures
 
 Tracked in this document at each review:
+
+- Status 2026-10-24 (Phase 1): Differential suite active (78/78 level solution probes, 67/67 Phase 2 semantic probes). CI differential step added with Python 3.12 & requirements-dev.txt. Total test suite passing at 283/283 tests.
 
 - Differential suite: share of level solutions and probes that match CPython (target 100%).
 - Grammar coverage against the README's "supported" list (generated from tests).
