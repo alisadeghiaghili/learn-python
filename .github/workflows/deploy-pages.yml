@@ -15,7 +15,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test-differential:
+    name: Differential Correctness Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Python test requirements
+        run: pip install -r requirements-dev.txt
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Run test suite with differential verification
+        run: npm test
+
   build:
+    name: Build Application
+    needs: test-differential
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,8 +52,6 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Test
-        run: npm test
       - name: Build
         run: npm run build
       - name: Upload Pages artifact
@@ -37,7 +60,7 @@ jobs:
           path: dist
 
   deploy:
-    needs: build
+    needs: [build, test-differential]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
