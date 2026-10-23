@@ -177,6 +177,9 @@ the browser.
   the engine and canvas.
 - [docs/adr/](docs/adr/) — architecture decision records (the simulated subset,
   library modules, control flow + record-replay).
+- [docs/COMPETITIVE-LANDSCAPE.md](docs/COMPETITIVE-LANDSCAPE.md) — how the project
+  compares with other Python learning tools, its gaps, and the positioning that
+  follows from them.
 
 ## License
 
