@@ -54,6 +54,8 @@ No counterexample was found for any of these at the assessment date:
 
 > Status as of 2026-10-24 (Phase 0 inventory): Baseline verified on branch fix/fidelity. 138 unit tests passing across 7 test files; 78 levels in 16 series. Gaps in grammar, CPython fidelity, pandas CoW, concurrency APIs, UI stepper/zoom, and accessibility verified and scheduled for remediation phases 1–9.
 
+> Status as of 2026-10-24 (Phase 1 differential harness): Differential test harness operational with real CPython >= 3.12 (tests/differential/). 283 tests passing across 9 test files (138 unit + 78 level differential + 67 semantics probes). 65 of 78 level solutions match CPython directly (13 non-standard levels tracked with it.fails); 16 of 67 Phase 2 semantics probes pass natively (51 tracked with it.fails).
+
 As of `d222b36` (details and repro steps live in the errata log):
 
 | Gap | Best-in-class reference | Consequence |
@@ -105,6 +107,13 @@ Tracked in this document at each review:
 
 > Status as of 2026-10-24 (Phase 0 baseline):
 > - Differential suite: 0% (harness not yet built, scheduled for Phase 1).
+> - Grammar coverage: baseline subset without unpacking, f-strings, classes, try/except.
+> - axe serious/critical violations: unmeasured baseline.
+> - Smallest supported viewport: clipped below 420 px width; collapses to 0 px height at 200% zoom.
+> - Levels per series: 78 levels across 16 series; 66 of 78 levels contain solution lines verbatim.
+
+> Status as of 2026-10-24 (Phase 1 milestone):
+> - Differential suite: 83.3% level solutions match CPython (65/78); 23.9% Phase 2 probes pass natively (16/67); 100% harness coverage.
 > - Grammar coverage: baseline subset without unpacking, f-strings, classes, try/except.
 > - axe serious/critical violations: unmeasured baseline.
 > - Smallest supported viewport: clipped below 420 px width; collapses to 0 px height at 200% zoom.
