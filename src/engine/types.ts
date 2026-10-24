@@ -9,15 +9,18 @@
  * strings, and functions live on the heap and are referenced by an `obj_` id
  * string. So `string` here means *either* a heap id or a raw string literal.
  */
-export type RtValue = number | string | boolean | null;
+export type RtValue = number | string | boolean | null | bigint;
 
 /** The code payload of a heap function object. */
 export interface FunctionCode {
   name: string;
   params: string[];
+  defaults?: Record<string, RtValue>;
+  compileTimeLocals?: Set<string>;
   body: AstNode[];
   /** True for an `async def`; calling it returns a coroutine instead of running. */
   async?: boolean;
+  closureFrames?: Frame[];
 }
 
 /** The memory segment an object lives in (for the RAM view). */
@@ -51,6 +54,10 @@ export interface HeapObject {
 export interface Frame {
   name: string;
   locals: Record<string, RtValue>;
+  globalNames?: Set<string>;
+  nonlocalNames?: Set<string>;
+  functionCode?: FunctionCode;
+  closureFrames?: Frame[];
 }
 
 /** A simple static plot spec (rendered on the Plot board tab). */
@@ -111,6 +118,8 @@ export interface BaseNode {
 export interface LiteralNode extends BaseNode {
   kind: 'Literal';
   value: RtValue;
+  raw?: string;
+  isFloat?: boolean;
 }
 export interface NameNode extends BaseNode {
   kind: 'Name';
@@ -207,6 +216,7 @@ export interface FunctionDefNode extends BaseNode {
   kind: 'FunctionDef';
   name: string;
   params: string[];
+  defaults?: Record<string, AstNode>;
   body: AstNode[];
 }
 /** An `async def` — a coroutine function; calling it returns a coroutine. */
@@ -246,12 +256,14 @@ export interface ForNode extends BaseNode {
   target: string;
   iterable: AstNode;
   body: AstNode[];
+  elseBody?: AstNode[] | null;
 }
 /** `while <test>:` */
 export interface WhileNode extends BaseNode {
   kind: 'While';
   test: AstNode;
   body: AstNode[];
+  elseBody?: AstNode[] | null;
 }
 /** `break` — exit the innermost loop. */
 export interface BreakNode extends BaseNode {
@@ -260,6 +272,19 @@ export interface BreakNode extends BaseNode {
 /** `continue` — skip to the next iteration of the innermost loop. */
 export interface ContinueNode extends BaseNode {
   kind: 'Continue';
+}
+export interface GlobalNode extends BaseNode {
+  kind: 'Global';
+  names: string[];
+}
+export interface NonlocalNode extends BaseNode {
+  kind: 'Nonlocal';
+  names: string[];
+}
+export interface ImportFromNode extends BaseNode {
+  kind: 'ImportFrom';
+  module: string;
+  names: Array<{ name: string; alias: string | null }>;
 }
 
 export type AstNode =
@@ -286,6 +311,9 @@ export type AstNode =
   | AwaitNode
   | PassNode
   | ImportNode
+  | ImportFromNode
+  | GlobalNode
+  | NonlocalNode
   | IfNode
   | ForNode
   | WhileNode

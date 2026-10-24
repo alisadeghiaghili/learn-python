@@ -8,7 +8,7 @@ const KEYWORDS = new Set([
   'def', 'return', 'if', 'elif', 'else', 'for', 'in', 'while',
   'and', 'or', 'not', 'is', 'None', 'True', 'False', 'pass',
   'break', 'continue', 'import', 'from', 'as', 'class', 'lambda',
-  'async', 'await',
+  'async', 'await', 'global', 'nonlocal',
 ]);
 
 const THREE_CHAR_OPS = ['//=', '**=', '...'];
@@ -100,9 +100,38 @@ export function tokenize(source: string): Token[] {
         i = j + 1;
         continue;
       }
+      if (ch === '0' && i + 1 < line.length && (line[i + 1] === 'x' || line[i + 1] === 'X')) {
+        let j = i + 2;
+        while (j < line.length && /[0-9a-fA-F_]/.test(line[j])) j++;
+        tokens.push({ type: 'NUMBER', value: line.slice(i, j), line: lineNo + 1, col: i + 1 });
+        i = j;
+        continue;
+      }
+      if (ch === '0' && i + 1 < line.length && (line[i + 1] === 'o' || line[i + 1] === 'O')) {
+        let j = i + 2;
+        while (j < line.length && /[0-7_]/.test(line[j])) j++;
+        tokens.push({ type: 'NUMBER', value: line.slice(i, j), line: lineNo + 1, col: i + 1 });
+        i = j;
+        continue;
+      }
+      if (ch === '0' && i + 1 < line.length && (line[i + 1] === 'b' || line[i + 1] === 'B')) {
+        let j = i + 2;
+        while (j < line.length && /[01_]/.test(line[j])) j++;
+        tokens.push({ type: 'NUMBER', value: line.slice(i, j), line: lineNo + 1, col: i + 1 });
+        i = j;
+        continue;
+      }
       if (/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(line[i + 1] || ''))) {
         let j = i;
         while (j < line.length && /[0-9._]/.test(line[j])) j++;
+        if (j < line.length && (line[j] === 'e' || line[j] === 'E')) {
+          let k = j + 1;
+          if (k < line.length && (line[k] === '+' || line[k] === '-')) k++;
+          if (k < line.length && /[0-9]/.test(line[k])) {
+            j = k;
+            while (j < line.length && /[0-9_]/.test(line[j])) j++;
+          }
+        }
         tokens.push({ type: 'NUMBER', value: line.slice(i, j), line: lineNo + 1, col: i + 1 });
         i = j;
         continue;

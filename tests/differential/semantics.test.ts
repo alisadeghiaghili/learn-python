@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Differential semantics test suite.
  *
  * Runs Phase 2 probes through both real CPython >= 3.12 and the simulator.
@@ -38,7 +38,7 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
       assertDifferentialMatch('x = 3\ny = x\nprint(x is y)');
     });
 
-    it.fails('id(3) returns an int', () => {
+    it('id(3) returns an int', () => {
       assertDifferentialMatch('print(isinstance(id(3), int))');
     });
 
@@ -60,11 +60,11 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
   });
 
   describe('2.2 Augmented assignment', () => {
-    it.fails('list in-place augmented addition mutates', () => {
+    it('list in-place augmented addition mutates', () => {
       assertDifferentialMatch('a = [1]\nb = a\na += [2]\nprint(b)');
     });
 
-    it.fails('list in-place augmented multiplication mutates', () => {
+    it('list in-place augmented multiplication mutates', () => {
       assertDifferentialMatch('a = [1]\nb = a\na *= 2\nprint(b)');
     });
 
@@ -72,55 +72,55 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
       assertDifferentialMatch('t = (1,)\nu = t\nt += (2,)\nprint(u, t is u)');
     });
 
-    it.fails('numpy array slice view augmented assignment', () => {
+    it('numpy array slice view augmented assignment', () => {
       assertDifferentialMatch('import numpy as np\na = np.array([1, 2, 3])\nv = a[:2]\nv += 10\nprint(a)');
     });
 
-    it.fails('list += accepts tuple iterable', () => {
+    it('list += accepts tuple iterable', () => {
       assertDifferentialMatch('x = [1]\nx += (2,)\nprint(x)');
     });
 
-    it.fails('list + tuple raises TypeError', () => {
+    it('list + tuple raises TypeError', () => {
       assertDifferentialMatch('x = [1]\nx = x + (2,)');
     });
   });
 
   describe('2.3 Scope', () => {
-    it.fails('unbound local detection raises UnboundLocalError', () => {
+    it('unbound local detection raises UnboundLocalError', () => {
       assertDifferentialMatch('x = 1\ndef f():\n    x = x + 1\n    return x\nf()');
     });
 
-    it.fails('global statement allows rebinding outer name', () => {
+    it('global statement allows rebinding outer name', () => {
       assertDifferentialMatch('x = 1\ndef f():\n    global x\n    x = x + 1\n    return x\nprint(f(), x)');
     });
 
-    it.fails('closures and nonlocal modification', () => {
+    it('closures and nonlocal modification', () => {
       assertDifferentialMatch('def outer():\n    x = 10\n    def inner():\n        nonlocal x\n        x += 1\n        return x\n    return inner\nf = outer()\nprint(f(), f())');
     });
 
-    it.fails('mutable default argument trap', () => {
+    it('mutable default argument trap', () => {
       assertDifferentialMatch('def f(a=[]):\n    a.append(1)\n    return a\nprint(f())\nprint(f())');
     });
   });
 
   describe('2.4 Numbers', () => {
-    it.fails('arbitrary precision: 2**64', () => {
+    it('arbitrary precision: 2**64', () => {
       assertDifferentialMatch('print(2**64)');
     });
 
-    it.fails('arbitrary precision: 2**100', () => {
+    it('arbitrary precision: 2**100', () => {
       assertDifferentialMatch('print(2**100)');
     });
 
-    it.fails('float division produces float 2.0', () => {
+    it('float division produces float 2.0', () => {
       assertDifferentialMatch('print(6/3)');
     });
 
-    it.fails('type(6/3) is float', () => {
+    it('type(6/3) is float', () => {
       assertDifferentialMatch("print(type(6/3))");
     });
 
-    it.fails('type(3.0) is float', () => {
+    it('type(3.0) is float', () => {
       assertDifferentialMatch("print(type(3.0))");
     });
 
@@ -136,11 +136,11 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
       assertDifferentialMatch('print(-7 % 3)');
     });
 
-    it.fails('scientific notation 1e5', () => {
+    it('scientific notation 1e5', () => {
       assertDifferentialMatch('print(1e5)');
     });
 
-    it.fails('hex literal 0x10', () => {
+    it('hex literal 0x10', () => {
       assertDifferentialMatch('print(0x10)');
     });
 
@@ -158,23 +158,23 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
   });
 
   describe('2.5 Errors instead of silent NaN / garbage', () => {
-    it.fails('string + int raises TypeError', () => {
+    it('string + int raises TypeError', () => {
       assertDifferentialMatch("'a' + 1");
     });
 
-    it.fails("int('x') raises ValueError", () => {
+    it("int('x') raises ValueError", () => {
       assertDifferentialMatch("int('x')");
     });
 
-    it.fails("-[1] raises TypeError", () => {
+    it("-[1] raises TypeError", () => {
       assertDifferentialMatch("-[1]");
     });
 
-    it.fails("1 < 'a' raises TypeError", () => {
+    it("1 < 'a' raises TypeError", () => {
       assertDifferentialMatch("1 < 'a'");
     });
 
-    it.fails("None.foo raises AttributeError", () => {
+    it("None.foo raises AttributeError", () => {
       assertDifferentialMatch("None.foo");
     });
 
@@ -190,21 +190,21 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
       assertDifferentialMatch("1 / 0");
     });
 
-    it.fails("infinite recursion raises RecursionError", () => {
+    it("infinite recursion raises RecursionError", () => {
       assertDifferentialMatch("def rec():\n    return rec()\nrec()");
     });
   });
 
   describe('2.6 Comparisons and containers', () => {
-    it.fails("'a' < 'b' lexicographic str comparison", () => {
+    it("'a' < 'b' lexicographic str comparison", () => {
       assertDifferentialMatch("print('a' < 'b')");
     });
 
-    it.fails("[1] < [2] list comparison", () => {
+    it("[1] < [2] list comparison", () => {
       assertDifferentialMatch("print([1] < [2])");
     });
 
-    it.fails("(1, 2) < (1, 3) tuple comparison", () => {
+    it("(1, 2) < (1, 3) tuple comparison", () => {
       assertDifferentialMatch("print((1, 2) < (1, 3))");
     });
 
@@ -212,64 +212,64 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
       assertDifferentialMatch("x = 2\nprint(1 < x < 3)");
     });
 
-    it.fails("str(12) + 'a'", () => {
+    it("str(12) + 'a'", () => {
       assertDifferentialMatch("print(str(12) + 'a')");
     });
 
-    it.fails("type(str(12)) is str", () => {
+    it("type(str(12)) is str", () => {
       assertDifferentialMatch("print(type(str(12)))");
     });
 
-    it.fails("string formatting with %d", () => {
+    it("string formatting with %d", () => {
       assertDifferentialMatch("print('%d' % 1)");
     });
 
-    it.fails("(1,) + (2,) tuple concatenation", () => {
+    it("(1,) + (2,) tuple concatenation", () => {
       assertDifferentialMatch("print((1,) + (2,))");
     });
 
-    it.fails("dict([('a', 1)]) constructor", () => {
+    it("dict([('a', 1)]) constructor", () => {
       assertDifferentialMatch("print(dict([('a', 1)]))");
     });
 
-    it.fails("list('abc') constructor", () => {
+    it("list('abc') constructor", () => {
       assertDifferentialMatch("print(list('abc'))");
     });
 
-    it.fails("negative index assignment a[-1] = 9", () => {
+    it("negative index assignment a[-1] = 9", () => {
       assertDifferentialMatch("a = [1, 2]\na[-1] = 9\nprint(a)");
     });
 
-    it.fails("out-of-bounds assignment raises IndexError", () => {
+    it("out-of-bounds assignment raises IndexError", () => {
       assertDifferentialMatch("a = [1]\na[5] = 1");
     });
 
-    it.fails("duplicate dict keys keep last value", () => {
+    it("duplicate dict keys keep last value", () => {
       assertDifferentialMatch("print({'a': 1, 'a': 2})");
     });
 
-    it.fails("dict key hashing treats 1 and True as equal", () => {
+    it("dict key hashing treats 1 and True as equal", () => {
       assertDifferentialMatch("print({1: 'a'}[True])");
     });
 
-    it.fails("set deduplication treats 1 and True as equal", () => {
+    it("set deduplication treats 1 and True as equal", () => {
       assertDifferentialMatch("print({1, True})");
     });
 
-    it.fails("unhashable list in dict raises TypeError", () => {
+    it("unhashable list in dict raises TypeError", () => {
       assertDifferentialMatch("{[1]: 2}");
     });
 
-    it.fails("set ordering for small integers", () => {
+    it("set ordering for small integers", () => {
       assertDifferentialMatch("print({3, 1, 2})");
     });
 
-    it.fails("self-referencing container repr", () => {
+    it("self-referencing container repr", () => {
       assertDifferentialMatch("l = []\nl.append(l)\nprint(l)");
     });
 
-    it.fails("unicode emoji length len('😀')", () => {
-      assertDifferentialMatch("print(len('😀'))");
+    it("unicode emoji length len('ðŸ˜€')", () => {
+      assertDifferentialMatch("print(len('ðŸ˜€'))");
     });
   });
 
@@ -278,29 +278,29 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
       assertDifferentialMatch('a = [1, 2, 3]\nfor x in a:\n    if x == 1:\n        a.remove(x)\nprint(a)');
     });
 
-    it.fails('type(range(3)) is range object', () => {
+    it('type(range(3)) is range object', () => {
       assertDifferentialMatch('print(type(range(3)))');
     });
 
-    it.fails('range(10**9) lazy evaluation without memory allocation', () => {
+    it('range(10**9) lazy evaluation without memory allocation', () => {
       assertDifferentialMatch('print(range(10**9).stop)');
     });
 
-    it.fails('for ... else executed when no break occurs', () => {
+    it('for ... else executed when no break occurs', () => {
       assertDifferentialMatch('for x in [1]:\n    pass\nelse:\n    print("done")');
     });
 
-    it.fails('while ... else executed when condition is false', () => {
+    it('while ... else executed when condition is false', () => {
       assertDifferentialMatch('while False:\n    pass\nelse:\n    print("done")');
     });
   });
 
   describe('2.8 Modules', () => {
-    it.fails('import math provides sqrt, floor and pi', () => {
+    it('import math provides sqrt, floor and pi', () => {
       assertDifferentialMatch('import math\nprint(math.sqrt(4), math.floor(3.7), math.pi > 3)');
     });
 
-    it.fails('import non-existent module raises ModuleNotFoundError', () => {
+    it('import non-existent module raises ModuleNotFoundError', () => {
       assertDifferentialMatch('import non_existent_mod_xyz');
     });
 
@@ -308,12 +308,13 @@ describe.skipIf(!hasCPython)('differential semantics (Phase 2 probes)', () => {
       assertDifferentialMatch('reduce');
     });
 
-    it.fails('from math import sqrt', () => {
+    it('from math import sqrt', () => {
       assertDifferentialMatch('from math import sqrt\nprint(sqrt(9))');
     });
 
-    it.fails('import math as m', () => {
+    it('import math as m', () => {
       assertDifferentialMatch('import math as m\nprint(m.sqrt(16))');
     });
   });
 });
+

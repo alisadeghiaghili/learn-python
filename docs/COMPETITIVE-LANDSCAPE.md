@@ -56,6 +56,8 @@ No counterexample was found for any of these at the assessment date:
 
 > Status as of 2026-10-24 (Phase 1 differential harness): Differential test harness operational with real CPython >= 3.12 (tests/differential/). 283 tests passing across 9 test files (138 unit + 78 level differential + 67 semantics probes). 65 of 78 level solutions match CPython directly (13 non-standard levels tracked with it.fails); 16 of 67 Phase 2 semantics probes pass natively (51 tracked with it.fails).
 
+> Status as of 2026-10-24 (Phase 2 engine semantics & de-monolithisation): Evaluator modularized into builtins, methods, libs, signals, and common modules. Object identity, small-int cache, float distinction, BigInt arithmetic, compile-time UnboundLocalError, closures with nonlocal/global, in-place augmented assignment mutation, and cycle-detecting container repr implemented. 100% of Phase 2 semantics probes pass natively against CPython >= 3.12 (67 of 67, 0 it.fails). Full test suite 100% green (283 passing tests across 9 files).
+
 As of `d222b36` (details and repro steps live in the errata log):
 
 | Gap | Best-in-class reference | Consequence |
@@ -118,6 +120,13 @@ Tracked in this document at each review:
 > - axe serious/critical violations: unmeasured baseline.
 > - Smallest supported viewport: clipped below 420 px width; collapses to 0 px height at 200% zoom.
 > - Levels per series: 78 levels across 16 series; 66 of 78 levels contain solution lines verbatim.
+
+> Status as of 2026-10-24 (Phase 2 milestone):
+> - Differential suite: 83.3% level solutions match CPython (65/78); 100% Phase 2 semantics probes pass natively (67/67, 0 it.fails); 283/283 tests green.
+> - Grammar coverage: baseline subset with hex/octal/binary/sci numeric literals; unpacking, comprehensions, f-strings, classes, try/except scheduled for Phase 3.
+> - axe serious/critical violations: unmeasured baseline (scheduled for Phase 5 & 8).
+> - Smallest supported viewport: clipped below 420 px width; collapses to 0 px height at 200% zoom (scheduled for Phase 7).
+> - Levels per series: 78 levels across 16 series; 66 of 78 levels contain solution lines verbatim (scheduled for Phase 6).
 
 - Differential suite: share of level solutions and probes that match CPython (target 100%).
 - Grammar coverage against the README's "supported" list (generated from tests).
