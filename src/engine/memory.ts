@@ -8,6 +8,7 @@
 import type {
   Frame,
   HeapObject,
+  MemorySegment,
   MemoryState,
   RtValue,
   Snapshot,
@@ -90,7 +91,7 @@ function estimateByteSize(type: string, value: unknown): number {
  * size for the RAM view. Reference count starts at 0 and is recomputed by
  * `computeRefCounts` after each statement.
  */
-export function allocObject(type: string, value: unknown, repr: string): HeapObject {
+export function allocObject(type: string, value: unknown, repr: string, seg?: MemorySegment): HeapObject {
   const id = `obj_${nextObjectId++}`;
   const byteSize = estimateByteSize(type, value);
   const addr = nextAddr;
@@ -103,7 +104,7 @@ export function allocObject(type: string, value: unknown, repr: string): HeapObj
     addr,
     byteSize,
     refCount: 0,
-    seg: type === 'buffer' ? 'buffer' : 'heap',
+    seg: seg ?? (type === 'buffer' ? 'buffer' : 'heap'),
   };
 }
 
@@ -358,9 +359,19 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
 
 /**
  * Deep-clone a memory state (undo / level snapshots).
+ * Handles BigInt and circular structures natively.
  */
 export function cloneState(state: MemoryState): MemoryState {
-  return JSON.parse(JSON.stringify(state));
+  if (typeof structuredClone === 'function') {
+    return structuredClone(state);
+  }
+  return JSON.parse(
+    JSON.stringify(state, (_key, val) =>
+      typeof val === 'bigint' ? { __bigint: val.toString() } : val
+    ),
+    (_key, val) =>
+      val && typeof val === 'object' && '__bigint' in val ? BigInt(val.__bigint) : val
+  );
 }
 
 /**

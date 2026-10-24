@@ -117,14 +117,14 @@ Where this model pays off and where it breaks.
         difficulty: 2,
         goal: {
           type: 'predicates',
-          predicates: [preds.isNdarray('a'), preds.hasRepr('a', '[1. 2. 3.]')],
+          predicates: [preds.isNdarray('a'), preds.hasRepr('a', '[1 2 3]')],
         },
         solution: 'a = np.array([1, 2, 3])',
         lesson: `In the memory model, \`np.array([1, 2, 3])\` makes **two** heap boxes. The inner one is a *buffer* — a flat run of raw numbers \`[1, 2, 3]\`. The outer one is the **ndarray**: a *window* (offset + shape) that says "show me this slice of that buffer."
 
 The name \`a\` points at the ndarray box, which in turn points at the buffer box. That split — the view over the raw data — is the whole idea numpy is built on, and it is exactly what makes views and copies possible.`,
         learning: ['An ndarray is a window over a separate buffer', 'The name points at the window, not the raw numbers'],
-        fieldNotes: ['The buffer is contiguous C memory; the window adds shape and stride', 'dtype is fixed per buffer — here `float64`'],
+        fieldNotes: ['The buffer is contiguous C memory; the window adds shape and stride', 'dtype is fixed per buffer — here `int64`'],
       },
       {
         id: 'np-copy',
@@ -137,7 +137,7 @@ The name \`a\` points at the ndarray box, which in turn points at the buffer box
         difficulty: 3,
         goal: {
           type: 'predicates',
-          predicates: [preds.isNdarray('b'), preds.hasRepr('b', '[1. 2.]'), preds.independentBuffer('a', 'b')],
+          predicates: [preds.isNdarray('b'), preds.hasRepr('b', '[1 2]'), preds.independentBuffer('a', 'b')],
         },
         solution: 'b = a.copy()',
         lesson: `\`a.copy()\` does real work: it reads \`a\`'s buffer and mints a **brand-new** buffer with the same numbers, then wraps it in a fresh window. Now \`a\` and \`b\` are two windows over **two different** buffers.
@@ -157,7 +157,7 @@ Watch the canvas: two ndarray boxes, each with its own amber edge to a *differen
         difficulty: 3,
         goal: {
           type: 'predicates',
-          predicates: [preds.isNdarray('v'), preds.hasRepr('v', '[1. 2.]'), preds.sharesBuffer('a', 'v')],
+          predicates: [preds.isNdarray('v'), preds.hasRepr('v', '[1 2]'), preds.sharesBuffer('a', 'v')],
         },
         solution: 'v = a[:2]',
         lesson: `This is the flagship. \`a[:2]\` does **not** copy the first two numbers into new memory. It just makes a **second window** — "show me elements 0 through 2" — pointing at the *very same* buffer \`a\` uses.
@@ -179,8 +179,8 @@ On the canvas you now see two ndarray boxes (\`a\` and \`v\`) with amber edges t
           type: 'predicates',
           predicates: [
             preds.sharesBuffer('a', 'v'),
-            preds.hasRepr('a', '[9. 2. 3.]'),
-            preds.hasRepr('v', '[9. 2.]'),
+            preds.hasRepr('a', '[9 2 3]'),
+            preds.hasRepr('v', '[9 2]'),
           ],
         },
         solution: 'v[0] = 9',
@@ -194,7 +194,7 @@ The canvas makes it unavoidable: one buffer box, two windows, one write, two obs
         id: 'np-vector-capstone',
         eli: 'eli20',
         name: 'Capstone: vectorize + fold',
-        brief: 'The numpy finale. `b = a + 1` is *vectorized* — it reads `a` and builds a **new** buffer `[2. 3. 4.]`. Then `s = b.sum()` folds that buffer into a single scalar.',
+        brief: 'The numpy finale. `b = a + 1` is *vectorized* — it reads `a` and builds a **new** buffer `[2 3 4]`. Then `s = b.sum()` folds that buffer into a single scalar.',
         hint: 'b = a + 1 (a new array), then s = b.sum()',
         start: 'import numpy as np\na = np.array([1, 2, 3])',
         par: 2,
@@ -203,7 +203,7 @@ The canvas makes it unavoidable: one buffer box, two windows, one write, two obs
           type: 'predicates',
           predicates: [
             preds.isNdarray('b'),
-            preds.hasRepr('b', '[2. 3. 4.]'),
+            preds.hasRepr('b', '[2 3 4]'),
             preds.independentBuffer('a', 'b'),
             preds.hasRepr('s', '9'),
           ],

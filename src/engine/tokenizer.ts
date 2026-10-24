@@ -8,7 +8,7 @@ const KEYWORDS = new Set([
   'def', 'return', 'if', 'elif', 'else', 'for', 'in', 'while',
   'and', 'or', 'not', 'is', 'None', 'True', 'False', 'pass',
   'break', 'continue', 'import', 'from', 'as', 'class', 'lambda',
-  'async', 'await',
+  'async', 'await', 'global', 'nonlocal', 'try', 'except', 'finally', 'raise',
 ]);
 
 const THREE_CHAR_OPS = ['//=', '**=', '...'];
@@ -102,7 +102,27 @@ export function tokenize(source: string): Token[] {
       }
       if (/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(line[i + 1] || ''))) {
         let j = i;
-        while (j < line.length && /[0-9._]/.test(line[j])) j++;
+        if (ch === '0' && (line[i + 1] === 'x' || line[i + 1] === 'X')) {
+          j += 2;
+          while (j < line.length && /[0-9a-fA-F_]/.test(line[j])) j++;
+        } else if (ch === '0' && (line[i + 1] === 'b' || line[i + 1] === 'B')) {
+          j += 2;
+          while (j < line.length && /[01_]/.test(line[j])) j++;
+        } else if (ch === '0' && (line[i + 1] === 'o' || line[i + 1] === 'O')) {
+          j += 2;
+          while (j < line.length && /[0-7_]/.test(line[j])) j++;
+        } else {
+          while (j < line.length && /[0-9_]/.test(line[j])) j++;
+          if (j < line.length && line[j] === '.') {
+            j++;
+            while (j < line.length && /[0-9_]/.test(line[j])) j++;
+          }
+          if (j < line.length && (line[j] === 'e' || line[j] === 'E')) {
+            j++;
+            if (j < line.length && (line[j] === '+' || line[j] === '-')) j++;
+            while (j < line.length && /[0-9_]/.test(line[j])) j++;
+          }
+        }
         tokens.push({ type: 'NUMBER', value: line.slice(i, j), line: lineNo + 1, col: i + 1 });
         i = j;
         continue;

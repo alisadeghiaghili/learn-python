@@ -9,12 +9,14 @@
  * strings, and functions live on the heap and are referenced by an `obj_` id
  * string. So `string` here means *either* a heap id or a raw string literal.
  */
-export type RtValue = number | string | boolean | null;
+export type RtValue = number | bigint | string | boolean | null;
 
 /** The code payload of a heap function object. */
 export interface FunctionCode {
   name: string;
   params: string[];
+  paramDefaults?: Record<string, RtValue>;
+  closure?: Record<string, { value: RtValue }>;
   body: AstNode[];
   /** True for an `async def`; calling it returns a coroutine instead of running. */
   async?: boolean;
@@ -111,6 +113,7 @@ export interface BaseNode {
 export interface LiteralNode extends BaseNode {
   kind: 'Literal';
   value: RtValue;
+  isFloat?: boolean;
 }
 export interface NameNode extends BaseNode {
   kind: 'Name';
@@ -207,6 +210,7 @@ export interface FunctionDefNode extends BaseNode {
   kind: 'FunctionDef';
   name: string;
   params: string[];
+  paramDefaults?: Record<string, AstNode>;
   body: AstNode[];
 }
 /** An `async def` — a coroutine function; calling it returns a coroutine. */
@@ -214,12 +218,18 @@ export interface CoroutineDefNode extends BaseNode {
   kind: 'CoroutineDef';
   name: string;
   params: string[];
+  paramDefaults?: Record<string, AstNode>;
   body: AstNode[];
 }
 /** `await x` — a suspension point inside a coroutine (yields the tick to the loop). */
 export interface AwaitNode extends BaseNode {
   kind: 'Await';
   value: AstNode;
+}
+export interface LambdaNode extends BaseNode {
+  kind: 'Lambda';
+  params: string[];
+  body: AstNode;
 }
 export interface PassNode extends BaseNode {
   kind: 'Pass';
@@ -230,6 +240,36 @@ export interface ImportNode extends BaseNode {
   name: string;
   /** Alias from `as`; null if the (first) module name is bound directly. */
   alias: string | null;
+}
+export interface ImportFromNode extends BaseNode {
+  kind: 'ImportFrom';
+  module: string;
+  names: Array<{ name: string; alias: string | null }>;
+}
+export interface GlobalNode extends BaseNode {
+  kind: 'Global';
+  names: string[];
+}
+export interface NonlocalNode extends BaseNode {
+  kind: 'Nonlocal';
+  names: string[];
+}
+export interface ExceptHandler {
+  type: AstNode | null;
+  name: string | null;
+  body: AstNode[];
+  line: number;
+}
+export interface TryNode extends BaseNode {
+  kind: 'Try';
+  body: AstNode[];
+  handlers: ExceptHandler[];
+  elseBody: AstNode[] | null;
+  finallyBody: AstNode[] | null;
+}
+export interface RaiseNode extends BaseNode {
+  kind: 'Raise';
+  exc: AstNode | null;
 }
 /** `if <test>:` with optional `elif` chain and `else`. */
 export interface IfNode extends BaseNode {
@@ -246,12 +286,14 @@ export interface ForNode extends BaseNode {
   target: string;
   iterable: AstNode;
   body: AstNode[];
+  elseBody?: AstNode[] | null;
 }
 /** `while <test>:` */
 export interface WhileNode extends BaseNode {
   kind: 'While';
   test: AstNode;
   body: AstNode[];
+  elseBody?: AstNode[] | null;
 }
 /** `break` — exit the innermost loop. */
 export interface BreakNode extends BaseNode {
@@ -283,9 +325,15 @@ export type AstNode =
   | ReturnNode
   | FunctionDefNode
   | CoroutineDefNode
+  | LambdaNode
   | AwaitNode
   | PassNode
   | ImportNode
+  | ImportFromNode
+  | GlobalNode
+  | NonlocalNode
+  | TryNode
+  | RaiseNode
   | IfNode
   | ForNode
   | WhileNode

@@ -6,7 +6,7 @@
  */
 
 import { tokenize } from './tokenizer';
-import type { AstNode, Token, TokenType } from './types';
+import type { AstNode, RtValue, Token, TokenType } from './types';
 
 class Parser {
   private tokens: Token[];
@@ -85,6 +85,35 @@ class Parser {
       this.eatNewline();
       return { kind: 'Pass', line: tok.line };
     }
+    if (tok.type === 'KEYWORD' && tok.value === 'global') {
+      this.next();
+      const names: string[] = [this.expect('NAME').value];
+      while (this.eatOp(',')) names.push(this.expect('NAME').value);
+      this.eatNewline();
+      return { kind: 'Global', names, line: tok.line };
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'nonlocal') {
+      this.next();
+      const names: string[] = [this.expect('NAME').value];
+      while (this.eatOp(',')) names.push(this.expect('NAME').value);
+      this.eatNewline();
+      return { kind: 'Nonlocal', names, line: tok.line };
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'raise') {
+      this.next();
+      let exc: AstNode | null = null;
+      if (this.peek() && this.peek().type !== 'NEWLINE') {
+        exc = this.parseExpr();
+      }
+      this.eatNewline();
+      return { kind: 'Raise', exc, line: tok.line };
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'try') {
+      return this.parseTry();
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'from') {
+      return this.parseImportFrom();
+    }
     if (tok.type === 'KEYWORD' && tok.value === 'import') {
       return this.parseImport();
     }
@@ -159,19 +188,42 @@ class Parser {
     return body;
   }
 
+  private parseParameters(): { params: string[]; paramDefaults: Record<string, AstNode> } {
+    const params: string[] = [];
+    const paramDefaults: Record<string, AstNode> = {};
+    if (!(this.peek() && this.peek().type === 'OP' && this.peek().value === ')')) {
+      const parseOne = () => {
+        const pName = this.expect('NAME').value;
+        params.push(pName);
+        if (this.eatOp(':')) {
+          this.parseExpr(); // skip type annotation
+        }
+        if (this.eatOp('=')) {
+          paramDefaults[pName] = this.parseExpr();
+        }
+      };
+      parseOne();
+      while (this.eatOp(',')) {
+        if (this.peek() && this.peek().type === 'OP' && this.peek().value === ')') break;
+        parseOne();
+      }
+    }
+    return { params, paramDefaults };
+  }
+
   private parseFunctionDef(): AstNode {
     const tok = this.expect('KEYWORD', 'def');
     const name = this.expect('NAME').value;
     this.expect('OP', '(');
-    const params: string[] = [];
-    if (!(this.peek() && this.peek().type === 'OP' && this.peek().value === ')')) {
-      params.push(this.expect('NAME').value);
-      while (this.eatOp(',')) params.push(this.expect('NAME').value);
-    }
+    const { params, paramDefaults } = this.parseParameters();
     this.expect('OP', ')');
+    if (this.peek() && this.peek().value === '->') {
+      this.next();
+      this.parseExpr(); // skip return type annotation
+    }
     this.eatOp(':');
     const body = this.parseSuite();
-    return { kind: 'FunctionDef', name, params, body, line: tok.line };
+    return { kind: 'FunctionDef', name, params, paramDefaults, body, line: tok.line };
   }
 
   /** `async def name(params):` — a coroutine function definition. */
@@ -180,15 +232,15 @@ class Parser {
     this.expect('KEYWORD', 'def');
     const name = this.expect('NAME').value;
     this.expect('OP', '(');
-    const params: string[] = [];
-    if (!(this.peek() && this.peek().type === 'OP' && this.peek().value === ')')) {
-      params.push(this.expect('NAME').value);
-      while (this.eatOp(',')) params.push(this.expect('NAME').value);
-    }
+    const { params, paramDefaults } = this.parseParameters();
     this.expect('OP', ')');
+    if (this.peek() && this.peek().value === '->') {
+      this.next();
+      this.parseExpr(); // skip return type annotation
+    }
     this.eatOp(':');
     const body = this.parseSuite();
-    return { kind: 'CoroutineDef', name, params, body, line: tok.line };
+    return { kind: 'CoroutineDef', name, params, paramDefaults, body, line: tok.line };
   }
 
   /** `if <test>:` body [`elif <test>:` body ...] [`else:` body] */
@@ -223,7 +275,7 @@ class Parser {
     return { kind: 'If', test, body, elifs, elseBody, line: tok.line };
   }
 
-  /** `for <name> in <iterable>:` body */
+  /** `for <name> in <iterable>:` body [else: body] */
   private parseFor(): AstNode {
     const tok = this.expect('KEYWORD', 'for');
     const target = this.expect('NAME').value;
@@ -231,18 +283,87 @@ class Parser {
     const iterable = this.parseExpr();
     this.eatOp(':');
     const body = this.parseSuite();
+    let elseBody: AstNode[] | null = null;
+    if (this.peek()?.type === 'KEYWORD' && this.peek()?.value === 'else') {
+      this.next();
+      this.eatOp(':');
+      elseBody = this.parseSuite();
+    }
     this.eatNewline();
-    return { kind: 'For', target, iterable, body, line: tok.line };
+    return { kind: 'For', target, iterable, body, elseBody, line: tok.line };
   }
 
-  /** `while <test>:` body */
+  /** `while <test>:` body [else: body] */
   private parseWhile(): AstNode {
     const tok = this.expect('KEYWORD', 'while');
     const test = this.parseExpr();
     this.eatOp(':');
     const body = this.parseSuite();
+    let elseBody: AstNode[] | null = null;
+    if (this.peek()?.type === 'KEYWORD' && this.peek()?.value === 'else') {
+      this.next();
+      this.eatOp(':');
+      elseBody = this.parseSuite();
+    }
     this.eatNewline();
-    return { kind: 'While', test, body, line: tok.line };
+    return { kind: 'While', test, body, elseBody, line: tok.line };
+  }
+
+  /** `from module import name [as alias], ...` */
+  private parseImportFrom(): AstNode {
+    const tok = this.expect('KEYWORD', 'from');
+    const parts: string[] = [this.expect('NAME').value];
+    while (this.eatOp('.')) parts.push(this.expect('NAME').value);
+    this.expect('KEYWORD', 'import');
+    const names: Array<{ name: string; alias: string | null }> = [];
+    do {
+      const n = this.expect('NAME').value;
+      let alias: string | null = null;
+      if (this.peek()?.type === 'KEYWORD' && this.peek()?.value === 'as') {
+        this.next();
+        alias = this.expect('NAME').value;
+      }
+      names.push({ name: n, alias });
+    } while (this.eatOp(','));
+    this.eatNewline();
+    return { kind: 'ImportFrom', module: parts.join('.'), names, line: tok.line };
+  }
+
+  /** `try: ... except [exc [as name]]: ... [else: ...] [finally: ...]` */
+  private parseTry(): AstNode {
+    const tok = this.expect('KEYWORD', 'try');
+    this.eatOp(':');
+    const body = this.parseSuite();
+    const handlers: import('./types').ExceptHandler[] = [];
+    while (this.peek()?.type === 'KEYWORD' && this.peek()?.value === 'except') {
+      const exTok = this.next();
+      let type: AstNode | null = null;
+      let name: string | null = null;
+      if (this.peek() && (this.peek().type !== 'OP' || this.peek().value !== ':')) {
+        type = this.parseExpr();
+        if (this.peek()?.type === 'KEYWORD' && this.peek()?.value === 'as') {
+          this.next();
+          name = this.expect('NAME').value;
+        }
+      }
+      this.eatOp(':');
+      const hBody = this.parseSuite();
+      handlers.push({ type, name, body: hBody, line: exTok.line });
+    }
+    let elseBody: AstNode[] | null = null;
+    if (this.peek()?.type === 'KEYWORD' && this.peek()?.value === 'else') {
+      this.next();
+      this.eatOp(':');
+      elseBody = this.parseSuite();
+    }
+    let finallyBody: AstNode[] | null = null;
+    if (this.peek()?.type === 'KEYWORD' && this.peek()?.value === 'finally') {
+      this.next();
+      this.eatOp(':');
+      finallyBody = this.parseSuite();
+    }
+    this.eatNewline();
+    return { kind: 'Try', body, handlers, elseBody, finallyBody, line: tok.line };
   }
 
   /** `import x`, `import x.y`, or `import x as z`. (from-imports are v1.) */
@@ -283,6 +404,20 @@ class Parser {
   }
 
   private parseExpr(): AstNode {
+    if (this.peek()?.type === 'KEYWORD' && this.peek().value === 'lambda') {
+      const line = this.next().line;
+      const params: string[] = [];
+      while (this.peek() && !(this.peek().type === 'OP' && this.peek().value === ':')) {
+        const id = this.expect('NAME').value;
+        params.push(id);
+        if (this.peek()?.type === 'OP' && this.peek().value === ',') {
+          this.next();
+        }
+      }
+      this.expect('OP', ':');
+      const body = this.parseExpr();
+      return { kind: 'Lambda', params, body, line };
+    }
     return this.parseOr();
   }
 
@@ -453,8 +588,18 @@ class Parser {
     if (tok.type === 'NUMBER') {
       this.next();
       const raw = tok.value.replace(/_/g, '');
-      const value = raw.includes('.') ? Number(raw) : parseInt(raw, 10);
-      return { kind: 'Literal', value, line: tok.line };
+      const isFloat = raw.includes('.') || /[eE]/.test(raw);
+      let value: RtValue;
+      if (isFloat) {
+        value = Number(raw);
+      } else {
+        const bn = BigInt(raw);
+        value =
+          bn <= BigInt(Number.MAX_SAFE_INTEGER) && bn >= BigInt(Number.MIN_SAFE_INTEGER)
+            ? Number(bn)
+            : bn;
+      }
+      return { kind: 'Literal', value, isFloat, line: tok.line };
     }
     if (tok.type === 'STRING') {
       this.next();

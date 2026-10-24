@@ -357,7 +357,7 @@ describe('defaultdict + functional (Phase 0c/0d)', () => {
     const state = runFresh('xs = [1, 2]\nms = map(int, xs)');
     const v = state.heap[state.frames[0].locals.ms as string].value as { source: string; fn: string };
     expect(state.heap[v.source]?.type).toBe('listiter');
-    expect(state.heap[v.fn]?.type).toBe('builtin');
+    expect(['builtin', 'type']).toContain(state.heap[v.fn]?.type);
   });
 
   test('isDefaultDict predicate', () => {
@@ -381,7 +381,7 @@ describe('numpy (Phase 1)', () => {
   });
 
   test('ndarray repr mirrors numpy float style', () => {
-    const state = runFresh('import numpy as np\na = np.array([1, 2, 3])');
+    const state = runFresh('import numpy as np\na = np.array([1.0, 2.0, 3.0])');
     expect(state.heap[state.frames[0].locals.a as string].repr).toBe('[1. 2. 3.]');
   });
 
@@ -406,7 +406,7 @@ describe('numpy (Phase 1)', () => {
     expect(vv.view).toBe(true);
     // the buffer keeps the full run; the view is a window over its front
     expect(state.heap[vv.buffer].repr).toBe('[1, 2, 3]');
-    expect(state.heap[v].repr).toBe('[1. 2.]');
+    expect(state.heap[v].repr).toBe('[1 2]');
   });
 
   test('a view mutation is seen through the original (shared buffer)', () => {
@@ -421,7 +421,7 @@ describe('numpy (Phase 1)', () => {
     const b = state.frames[0].locals.b as string;
     const bObj = state.heap[b];
     expect(bObj.type).toBe('ndarray');
-    expect(bObj.repr).toBe('[2. 3.]');
+    expect(bObj.repr).toBe('[2 3]');
     const bufA = (state.heap[state.frames[0].locals.a as string].value as { buffer: string }).buffer;
     const bufB = (bObj.value as { buffer: string }).buffer;
     expect(bufA).not.toBe(bufB);
@@ -868,9 +868,11 @@ describe('control flow (if / for / while / range / break / continue)', () => {
 
   test('range supports start/stop and step (including negative step)', () => {
     const a = runFresh('r = range(2, 8, 2)');
-    expect(a.heap[a.frames[0].locals.r as string].repr).toBe('[2, 4, 6]');
+    expect(a.heap[a.frames[0].locals.r as string].repr).toBe('range(2, 8, 2)');
     const b = runFresh('r = range(5, 0, -1)');
-    expect(b.heap[b.frames[0].locals.r as string].repr).toBe('[5, 4, 3, 2, 1]');
+    expect(b.heap[b.frames[0].locals.r as string].repr).toBe('range(5, 0, -1)');
+    const c = runFresh('r = list(range(2, 8, 2))');
+    expect(c.heap[c.frames[0].locals.r as string].repr).toBe('[2, 4, 6]');
   });
 
   test('nested control flow (if inside a for) composes', () => {

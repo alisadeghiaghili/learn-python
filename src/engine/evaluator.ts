@@ -6,6 +6,41 @@
 
 import { allocObject, cloneState, computeRefCounts, createModuleState } from './memory';
 import { parse } from './parser';
+import {
+  PyAttributeError,
+  PyException,
+  PyIndexError,
+  PyKeyError,
+  PyModuleNotFoundError,
+  PyNameError,
+  PyRecursionError,
+  PySyntaxError,
+  PyTypeError,
+  PyUnboundLocalError,
+  PyValueError,
+  PyZeroDivisionError,
+  isExceptionInstanceOf,
+} from './errors';
+import {
+  allocFloat,
+  formatFloat,
+  getObjectId,
+  getTypeObject,
+  typeName,
+} from './builtins/types';
+import { MATH_CONSTANTS, MATH_FUNCTIONS } from './builtins/math';
+import {
+  RangeValue,
+  makeLazyRange,
+  rangeContains,
+  rangeGetItem,
+  rangeLength,
+  rangeRepr,
+} from './builtins/range';
+import { callListMethod } from './methods/list';
+import { callDictMethod, dictKeyRepr } from './methods/dict';
+import { callSetMethod } from './methods/set';
+import { callStrMethod } from './methods/str';
 import type {
   AstNode,
   Frame,
@@ -43,9 +78,13 @@ export function run(source: string, state: MemoryState): MemoryState {
     // Recompute the refcount column for the RAM view from the now-final graph.
     computeRefCounts(state);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    let finalErr = err;
+    if (err instanceof RangeError || (err instanceof Error && err.name === 'RangeError')) {
+      finalErr = new PyRecursionError('maximum recursion depth exceeded');
+    }
+    const message = finalErr instanceof Error ? `${finalErr.name}: ${finalErr.message}` : String(finalErr);
     state.errors.push(message);
-    throw err;
+    throw finalErr;
   }
   return state;
 }
@@ -60,7 +99,7 @@ function refreshReprs(state: MemoryState): void {
       obj.repr = formatObject(obj, state);
     }
     if (obj.type === 'ndarray') {
-      obj.repr = numpyRepr(ndarrayWindow(obj.id, state));
+      obj.repr = numpyRepr(ndarrayWindow(obj.id, state), (obj.value as NdarrayValue).dtype);
     }
   }
 }
@@ -72,7 +111,7 @@ function refreshReprs(state: MemoryState): void {
  */
 function refreshNdarrayReprs(state: MemoryState): void {
   for (const obj of Object.values(state.heap)) {
-    if (obj.type === 'ndarray') obj.repr = numpyRepr(ndarrayWindow(obj.id, state));
+    if (obj.type === 'ndarray') obj.repr = numpyRepr(ndarrayWindow(obj.id, state), (obj.value as NdarrayValue).dtype);
     if (obj.type === 'buffer') obj.repr = `[${(obj.value as NumpyBufferValue).data.join(', ')}]`;
   }
 }
@@ -145,9 +184,109 @@ class PyContinue extends Error {
  * heap objects, heap strings, and raw string literals (strings are raw values
  * in this engine, not heap objects).
  */
+interface ScopeInfo {
+  locals: Set<string>;
+  globals: Set<string>;
+  nonlocals: Set<string>;
+}
+
+const KNOWN_MODULES = new Set([
+  'math',
+  'copy',
+  'numpy',
+  'np',
+  'pandas',
+  'pd',
+  'asyncio',
+  'threading',
+  'time',
+  'json',
+  'sys',
+  'typing',
+  'dataclasses',
+  'collections',
+  'random',
+  'functools',
+]);
+
+function analyzeLocals(body: AstNode[]): ScopeInfo {
+  const assigned = new Set<string>();
+  const globals = new Set<string>();
+  const nonlocals = new Set<string>();
+
+  function extractTargetNames(target: AstNode): void {
+    if (target.kind === 'Name') {
+      assigned.add(target.id);
+    } else if (target.kind === 'Tuple') {
+      for (const e of target.elts) extractTargetNames(e);
+    } else if (target.kind === 'List') {
+      for (const e of target.elts) extractTargetNames(e);
+    }
+  }
+
+  function walk(stmt: AstNode): void {
+    if (!stmt) return;
+    switch (stmt.kind) {
+      case 'Global':
+        for (const n of stmt.names) globals.add(n);
+        break;
+      case 'Nonlocal':
+        for (const n of stmt.names) nonlocals.add(n);
+        break;
+      case 'Assign':
+        extractTargetNames(stmt.target);
+        break;
+      case 'AugAssign':
+        if (stmt.target.kind === 'Name') assigned.add(stmt.target.id);
+        break;
+      case 'For':
+        assigned.add(stmt.target);
+        for (const s of stmt.body) walk(s);
+        if (stmt.elseBody) for (const s of stmt.elseBody) walk(s);
+        break;
+      case 'While':
+        for (const s of stmt.body) walk(s);
+        if (stmt.elseBody) for (const s of stmt.elseBody) walk(s);
+        break;
+      case 'If':
+        for (const s of stmt.body) walk(s);
+        for (const b of stmt.elifs) for (const s of b.body) walk(s);
+        if (stmt.elseBody) for (const s of stmt.elseBody) walk(s);
+        break;
+      case 'Try':
+        for (const s of stmt.body) walk(s);
+        for (const h of stmt.handlers) {
+          if (h.name) assigned.add(h.name);
+          for (const s of h.body) walk(s);
+        }
+        if (stmt.elseBody) for (const s of stmt.elseBody) walk(s);
+        if (stmt.finallyBody) for (const s of stmt.finallyBody) walk(s);
+        break;
+      case 'FunctionDef':
+      case 'CoroutineDef':
+        assigned.add(stmt.name);
+        break;
+    }
+  }
+
+  for (const s of body) walk(s);
+  const locals = new Set<string>();
+  for (const a of assigned) {
+    if (!globals.has(a) && !nonlocals.has(a)) {
+      locals.add(a);
+    }
+  }
+  return { locals, globals, nonlocals };
+}
+
+/**
+ * Flatten an iterable expression value into the list of element values a `for`
+ * loop will bind its target to, one element at a time. Handles list/tuple/set/range
+ * heap objects, heap strings, and raw string literals.
+ */
 function iterableToRtValues(v: RtValue, state: MemoryState, line: number): RtValue[] {
   if (typeof v !== 'string') {
-    throw new Error(`TypeError: '${typeName(v, state)}' object is not iterable (line ${line})`);
+    throw new PyTypeError(`'${typeName(v, state)}' object is not iterable (line ${line})`);
   }
   const obj = state.heap[v];
   if (!obj) {
@@ -163,34 +302,24 @@ function iterableToRtValues(v: RtValue, state: MemoryState, line: number): RtVal
     for (let i = 0; i < s.length; i++) out.push(allocString(s[i]!, state));
     return out;
   }
+  if (obj.type === 'range') {
+    const r = obj.value as RangeValue;
+    const len = rangeLength(r);
+    const out: RtValue[] = [];
+    for (let i = 0; i < len; i++) out.push(rangeGetItem(r, i));
+    return out;
+  }
   if (['list', 'tuple', 'set'].includes(obj.type)) {
     return [...(obj.value as RtValue[])];
   }
-  throw new Error(`TypeError: '${obj.type}' object is not iterable (line ${line})`);
+  throw new PyTypeError(`'${obj.type}' object is not iterable (line ${line})`);
 }
 
 /**
- * `range(stop)` / `range(start, stop)` / `range(start, stop, step)` → a list of
- * ints. Returning a concrete list keeps the loop's target a real heap object on
- * the canvas (the beginner "here are the numbers you will walk through" picture).
+ * `range(stop)` / `range(start, stop)` / `range(start, stop, step)` → lazy range heap object.
  */
 function makeRange(args: RtValue[], state: MemoryState, line: number): RtValue {
-  const nums = args.map((a) => Math.trunc(derefNumber(a, state)));
-  let start = 0;
-  let stop: number;
-  let step = 1;
-  if (nums.length === 1) stop = nums[0]!;
-  else if (nums.length === 2) [start, stop] = [nums[0]!, nums[1]!];
-  else if (nums.length === 3) [start, stop, step] = [nums[0]!, nums[1]!, nums[2]!];
-  else throw new Error(`TypeError: range() expects 1-3 arguments (line ${line})`);
-  if (step === 0) throw new Error(`ZeroDivisionError: range() step cannot be zero (line ${line})`);
-  const out: number[] = [];
-  if (step > 0) for (let i = start; i < stop; i += step) out.push(i);
-  else for (let i = start; i > stop; i += step) out.push(i);
-  const obj = allocObject('list', out, formatListLike(out, state, '[', ']'));
-  state.heap[obj.id] = obj;
-  obj.repr = formatObject(obj, state);
-  return obj.id;
+  return makeLazyRange(args, state, line);
 }
 
 /**
@@ -204,10 +333,39 @@ function execStatement(node: AstNode, state: MemoryState): void {
       return;
     }
     case 'AugAssign': {
-      const current = readTarget(node.target, state);
+      const target = node.target;
       const rhs = evalExpr(node.value, state);
-      const combined = binOp(node.op, current, rhs, state, node.line);
-      bindTarget(node.target, combined, state);
+      const op = node.op.endsWith('=') ? node.op.slice(0, -1) : node.op;
+      if (target.kind === 'Name') {
+        const current = lookupName(target.id, state, node.line);
+        if (typeof current === 'string' && state.heap[current]) {
+          const obj = state.heap[current];
+          if (op === '+' && obj.type === 'list') {
+            const items = iterableToRtValues(rhs, state, node.line);
+            (obj.value as RtValue[]).push(...items);
+            obj.repr = formatObject(obj, state);
+            return;
+          }
+          if (op === '*' && obj.type === 'list') {
+            const factor = Number(rhs);
+            const src = [...(obj.value as RtValue[])];
+            (obj.value as RtValue[]).length = 0;
+            for (let i = 0; i < factor; i++) (obj.value as RtValue[]).push(...src);
+            obj.repr = formatObject(obj, state);
+            return;
+          }
+          if (op === '+' && obj.type === 'ndarray') {
+            vecAddInPlace(current, rhs, state, node.line);
+            return;
+          }
+        }
+        const combined = binOp(op, current, rhs, state, node.line);
+        bindTarget(target, combined, state);
+        return;
+      }
+      const current = readTarget(target, state);
+      const combined = binOp(op, current, rhs, state, node.line);
+      bindTarget(target, combined, state);
       return;
     }
     case 'ExprStatement': {
@@ -219,33 +377,77 @@ function execStatement(node: AstNode, state: MemoryState): void {
       throw new PyReturn(value);
     }
     case 'FunctionDef': {
-      const fn = allocObject('function', {
-        name: node.name,
-        params: [...node.params],
-        body: node.body,
-      } as FunctionCode, `function ${node.name}`);
-      // Store as a named frame binding to a code object; also keep callables in heap.
+      const paramDefaults: Record<string, RtValue> = {};
+      if (node.paramDefaults) {
+        for (const [p, expr] of Object.entries(node.paramDefaults)) {
+          paramDefaults[p] = evalExpr(expr, state);
+        }
+      }
+      const fn = allocObject(
+        'function',
+        {
+          name: node.name,
+          params: [...node.params],
+          paramDefaults,
+          body: node.body,
+        } as FunctionCode,
+        `function ${node.name}`
+      );
       setFrameLocal(currentFrame(state), node.name, fn.id);
       state.heap[fn.id] = fn;
       return;
     }
     case 'CoroutineDef': {
-      // An `async def` binds a coroutine-function code object (async: true).
-      const fn = allocObject('function', {
-        name: node.name,
-        params: [...node.params],
-        body: node.body,
-        async: true,
-      } as FunctionCode, `async function ${node.name}`);
+      const paramDefaults: Record<string, RtValue> = {};
+      if (node.paramDefaults) {
+        for (const [p, expr] of Object.entries(node.paramDefaults)) {
+          paramDefaults[p] = evalExpr(expr, state);
+        }
+      }
+      const fn = allocObject(
+        'function',
+        {
+          name: node.name,
+          params: [...node.params],
+          paramDefaults,
+          body: node.body,
+          async: true,
+        } as FunctionCode,
+        `async function ${node.name}`
+      );
       setFrameLocal(currentFrame(state), node.name, fn.id);
       state.heap[fn.id] = fn;
       return;
     }
     case 'Import': {
+      if (!KNOWN_MODULES.has(node.name)) {
+        throw new PyModuleNotFoundError(node.name);
+      }
       const mod = allocObject('module', { name: node.name }, `<module '${node.name}'>`);
       state.heap[mod.id] = mod;
       const localName = node.alias ?? node.name.split('.')[0];
       setFrameLocal(currentFrame(state), localName, mod.id);
+      return;
+    }
+    case 'ImportFrom': {
+      if (!KNOWN_MODULES.has(node.module)) {
+        throw new PyModuleNotFoundError(node.module);
+      }
+      if (node.module === 'math') {
+        for (const item of node.names) {
+          const boundName = item.alias ?? item.name;
+          if (item.name in MATH_CONSTANTS) {
+            setFrameLocal(currentFrame(state), boundName, allocFloat(MATH_CONSTANTS[item.name]!, state));
+          } else if (item.name in MATH_FUNCTIONS) {
+            const fnObj = allocObject('builtin', `math.${item.name}`, `math.${item.name}`, 'heap');
+            state.heap[fnObj.id] = fnObj;
+            setFrameLocal(currentFrame(state), boundName, fnObj.id);
+          } else {
+            throw new PyAttributeError(`cannot import name '${item.name}' from 'math'`);
+          }
+        }
+        return;
+      }
       return;
     }
     case 'If': {
@@ -266,50 +468,122 @@ function execStatement(node: AstNode, state: MemoryState): void {
       return;
     }
     case 'For': {
-      const items = iterableToRtValues(evalExpr(node.iterable, state), state, node.line);
-      for (let i = 0; i < items.length; i++) {
-        setFrameLocal(currentFrame(state), node.target, items[i]!);
-        try {
-          execBody(node.body, state);
-        } catch (e) {
-          if (e instanceof PyBreak) break;
-          if (e instanceof PyContinue) {
-            recordStep(state);
-            continue;
+      const iterVal = evalExpr(node.iterable, state);
+      const isLiveList = typeof iterVal === 'string' && state.heap[iterVal]?.type === 'list';
+      const targetList = isLiveList ? (state.heap[iterVal].value as RtValue[]) : null;
+      let broke = false;
+
+      if (targetList) {
+        let i = 0;
+        let loopGuard = 0;
+        while (i < targetList.length) {
+          if (++loopGuard > 100000) throw new PyRecursionError('for loop did not terminate (infinite loop)');
+          setFrameLocal(currentFrame(state), node.target, targetList[i]!);
+          try {
+            execBody(node.body, state);
+          } catch (e) {
+            if (e instanceof PyBreak) { broke = true; break; }
+            if (e instanceof PyContinue) { recordStep(state); i++; continue; }
+            throw e;
           }
-          throw e;
+          recordStep(state);
+          i++;
         }
-        recordStep(state);
+      } else {
+        const items = iterableToRtValues(iterVal, state, node.line);
+        for (let i = 0; i < items.length; i++) {
+          setFrameLocal(currentFrame(state), node.target, items[i]!);
+          try {
+            execBody(node.body, state);
+          } catch (e) {
+            if (e instanceof PyBreak) { broke = true; break; }
+            if (e instanceof PyContinue) { recordStep(state); continue; }
+            throw e;
+          }
+          recordStep(state);
+        }
+      }
+      if (!broke && node.elseBody) {
+        execBody(node.elseBody, state);
       }
       return;
     }
     case 'While': {
-      // A beginner's `while True:` with no exit must not hang the browser.
       let guard = 0;
+      let broke = false;
       while (truthy(evalExpr(node.test, state), state)) {
-        if (++guard > 100000) throw new Error('RuntimeError: while loop did not terminate (infinite loop)');
+        if (++guard > 100000) throw new PyRecursionError('while loop did not terminate (infinite loop)');
         try {
           execBody(node.body, state);
         } catch (e) {
-          if (e instanceof PyBreak) break;
-          if (e instanceof PyContinue) {
-            recordStep(state);
-            continue;
-          }
+          if (e instanceof PyBreak) { broke = true; break; }
+          if (e instanceof PyContinue) { recordStep(state); continue; }
           throw e;
         }
         recordStep(state);
       }
+      if (!broke && node.elseBody) {
+        execBody(node.elseBody, state);
+      }
       return;
+    }
+    case 'Try': {
+      let excThrown: unknown = null;
+      let handled = false;
+      try {
+        execBody(node.body, state);
+      } catch (e) {
+        excThrown = e;
+        for (const handler of node.handlers) {
+          if (!handler.type) {
+            handled = true;
+          } else {
+            const excType = evalExpr(handler.type, state);
+            const excTypeName =
+              typeof excType === 'string' && state.heap[excType]?.type === 'type'
+                ? (state.heap[excType].value as { name: string }).name
+                : typeof excType === 'string' && state.heap[excType]?.type === 'builtin'
+                ? (state.heap[excType].value as string)
+                : String(excType);
+            if (isExceptionInstanceOf(e, excTypeName)) {
+              handled = true;
+            }
+          }
+          if (handled) {
+            if (handler.name) {
+              setFrameLocal(currentFrame(state), handler.name, String(e));
+            }
+            execBody(handler.body, state);
+            break;
+          }
+        }
+        if (!handled) throw e;
+      }
+      if (!excThrown && node.elseBody) {
+        execBody(node.elseBody, state);
+      }
+      if (node.finallyBody) {
+        execBody(node.finallyBody, state);
+      }
+      return;
+    }
+    case 'Raise': {
+      if (!node.exc) {
+        throw new PyException('RuntimeError', 'No active exception to reraise');
+      }
+      const excVal = evalExpr(node.exc, state);
+      throw new PyException(typeName(excVal, state), displayValue(excVal, state));
     }
     case 'Break':
       throw new PyBreak();
     case 'Continue':
       throw new PyContinue();
     case 'Pass':
+    case 'Global':
+    case 'Nonlocal':
       return;
     default:
-      throw new Error(`RuntimeError: unsupported statement ${node.kind}`);
+      throw new PyException('RuntimeError', `unsupported statement ${node.kind}`);
   }
 }
 
@@ -352,19 +626,43 @@ function setFrameLocal(frame: Frame, name: string, value: RtValue): void {
  * Resolve a name: local frame then module.
  */
 function lookupName(name: string, state: MemoryState, line: number): RtValue {
-  for (let i = state.frames.length - 1; i >= 0; i--) {
+  const current = currentFrame(state) as Frame & { scopeInfo?: ScopeInfo };
+  if (current.scopeInfo) {
+    const { locals, globals, nonlocals } = current.scopeInfo;
+    if (locals.has(name)) {
+      if (name in current.locals) return current.locals[name]!;
+      throw new PyUnboundLocalError(`cannot access local variable '${name}' where it is not associated with a value (line ${line})`);
+    }
+    if (globals.has(name)) {
+      if (name in state.frames[0].locals) return state.frames[0].locals[name]!;
+      throw new PyNameError(`name '${name}' is not defined (line ${line})`);
+    }
+    if (nonlocals.has(name)) {
+      for (let i = state.frames.length - 2; i >= 1; i--) {
+        if (name in state.frames[i].locals) return state.frames[i].locals[name]!;
+      }
+      throw new PyNameError(`name '${name}' is not defined (line ${line})`);
+    }
+    if (name in current.locals) return current.locals[name]!;
+  } else {
+    if (name in current.locals) return current.locals[name]!;
+  }
+
+  for (let i = state.frames.length - 2; i >= 0; i--) {
     if (name in state.frames[i].locals) {
-      return state.frames[i].locals[name];
+      return state.frames[i].locals[name]!;
     }
   }
-  // A bare reference to a constructor (e.g. `defaultdict(int)`, `map(int, xs)`)
-  // resolves to a `builtin` object so it can be stored on a map/defaultdict.
+
+  if (['int', 'float', 'str', 'bool', 'list', 'dict', 'tuple', 'set', 'range', 'type'].includes(name)) {
+    return getTypeObject(name, state);
+  }
   if (BUILTIN_CONSTRUCTORS.has(name)) {
     const b = allocObject('builtin', name, name);
     state.heap[b.id] = b;
     return b.id;
   }
-  throw new Error(`NameError: name '${name}' is not defined (line ${line})`);
+  throw new PyNameError(`name '${name}' is not defined (line ${line})`);
 }
 
 /**
@@ -372,43 +670,64 @@ function lookupName(name: string, state: MemoryState, line: number): RtValue {
  */
 function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
   if (target.kind === 'Name') {
-    setFrameLocal(currentFrame(state), target.id, value);
+    const current = currentFrame(state) as Frame & { scopeInfo?: ScopeInfo };
+    if (current.scopeInfo) {
+      if (current.scopeInfo.globals.has(target.id)) {
+        state.frames[0].locals[target.id] = value;
+        return;
+      }
+      if (current.scopeInfo.nonlocals.has(target.id)) {
+        for (let i = state.frames.length - 2; i >= 1; i--) {
+          if (target.id in state.frames[i].locals) {
+            state.frames[i].locals[target.id] = value;
+            return;
+          }
+        }
+        state.frames[0].locals[target.id] = value;
+        return;
+      }
+    }
+    setFrameLocal(current, target.id, value);
     return;
   }
   if (target.kind === 'Subscript') {
     const objId = evalExpr(target.object, state);
     const index = target.index ? evalExpr(target.index, state) : null;
     const obj = state.heap[objId as string];
-    if (!obj) throw new Error('TypeError: cannot subscript immutable value');
+    if (!obj) throw new PyTypeError(`cannot subscript immutable value (line ${target.line})`);
     const line = target.line;
-    // df.iloc[i] = [..] — position-based row write through the shared buffer
+
     if (target.attr === 'iloc') {
       frameIlocSet(objId as string, index as RtValue, value, state, line);
       return;
     }
-    // df['col'] = [..] — replace a column's values in the shared buffer
     if (obj.type === 'dataframe') {
       frameSetColumn(objId as string, index as RtValue, value, state, line);
       return;
     }
     if (obj.type === 'list') {
-      (obj.value as RtValue[])[index as number] = value;
+      const elts = obj.value as RtValue[];
+      let idx = Number(index);
+      if (idx < 0) idx += elts.length;
+      if (idx < 0 || idx >= elts.length) {
+        throw new PyIndexError(`list assignment index out of range (line ${line})`);
+      }
+      elts[idx] = value;
       obj.repr = formatObject(obj, state);
       return;
     }
     if (obj.type === 'ndarray') {
       const v = obj.value as NdarrayValue;
       const n = Number(value);
-      if (Number.isNaN(n)) throw new Error(`TypeError: cannot assign non-number to ndarray (line 0)`);
-      const i = index as number;
+      if (Number.isNaN(n)) throw new PyTypeError(`cannot assign non-number to ndarray (line ${line})`);
+      const i = Number(index);
       const data = (state.heap[v.buffer].value as NumpyBufferValue).data;
       data[v.offset + i] = n;
-      // A buffer write is seen by every ndarray window over it — refresh them all.
       refreshNdarrayReprs(state);
       return;
     }
     if (obj.type === 'dict' || obj.type === 'defaultdict') {
-      const keyRepr = dictKeyRepr(index, state);
+      const keyRepr = dictKeyRepr(index, state, line);
       const entries = dictEntries(obj);
       const existing = entries.find(([k]) => k === keyRepr);
       if (existing) existing[1] = value;
@@ -416,9 +735,9 @@ function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
       obj.repr = formatObject(obj, state);
       return;
     }
-    throw new Error(`TypeError: '${obj.type}' object does not support item assignment`);
+    throw new PyTypeError(`'${obj.type}' object does not support item assignment (line ${line})`);
   }
-  throw new Error(`SyntaxError: cannot assign to ${target.kind}`);
+  throw new PySyntaxError(`cannot assign to ${target.kind}`);
 }
 
 /**
@@ -433,13 +752,13 @@ function readTarget(target: AstNode, state: MemoryState): RtValue {
  */
 function evalExpr(node: AstNode, state: MemoryState): RtValue {
   switch (node.kind) {
-    case 'Literal':
-      // String literals are heap objects (the thesis: strings are objects), so
-      // concatenation, .upper(), indexing, `for`, and `in` all flow through the
-      // single str code path, and the value is visible on the canvas. Numbers,
-      // booleans, and None stay raw in-frame.
+    case 'Literal': {
+      if (node.isFloat) {
+        return allocFloat(Number(node.value), state);
+      }
       if (typeof node.value === 'string') return allocString(node.value, state);
       return node.value;
+    }
     case 'Name':
       return lookupName(node.id, state, node.line);
     case 'List': {
@@ -457,30 +776,46 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
       return obj.id;
     }
     case 'Dict': {
-      const pairs: Array<[string, RtValue]> = [];
+      const entries: Array<[string, RtValue]> = [];
       for (let i = 0; i < node.keys.length; i++) {
-        const k = evalExpr(node.keys[i], state);
-        const v = evalExpr(node.values[i], state);
-        pairs.push([dictKeyRepr(k, state), v]);
+        const k = evalExpr(node.keys[i]!, state);
+        const v = evalExpr(node.values[i]!, state);
+        const kRepr = dictKeyRepr(k, state, node.line);
+        const existing = entries.find(([existingKey]) => existingKey === kRepr);
+        if (existing) {
+          existing[1] = v;
+        } else {
+          entries.push([kRepr, v]);
+        }
       }
-      const obj = allocObject('dict', pairs, '');
+      const obj = allocObject('dict', entries, '');
       state.heap[obj.id] = obj;
       obj.repr = formatObject(obj, state);
       return obj.id;
     }
     case 'Set': {
-      const seen = new Map<string, RtValue>();
+      const elts: RtValue[] = [];
       for (const e of node.elts) {
-        const v = evalExpr(e, state);
-        // De-duplicate by displayed value (primitive/heap identity).
-        const key = displayValue(v, state);
-        if (!seen.has(key)) seen.set(key, v);
+        const val = evalExpr(e, state);
+        const kRepr = dictKeyRepr(val, state, node.line);
+        if (!elts.some((existing) => dictKeyRepr(existing, state) === kRepr)) {
+          elts.push(val);
+        }
       }
-      const elts = [...seen.values()];
       const obj = allocObject('set', elts, '');
       state.heap[obj.id] = obj;
       obj.repr = formatObject(obj, state);
       return obj.id;
+    }
+    case 'Lambda': {
+      const code: FunctionCode = {
+        name: '<lambda>',
+        params: node.params,
+        body: [{ kind: 'Return', value: node.body, line: node.line }],
+      };
+      const fnObj = allocObject('function', code, '<function <lambda>>');
+      state.heap[fnObj.id] = fnObj;
+      return fnObj.id;
     }
     case 'BinOp': {
       const left = evalExpr(node.left, state);
@@ -490,7 +825,17 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
     case 'UnaryOp': {
       const val = evalExpr(node.operand, state);
       if (node.op === 'not') return !truthy(val, state);
-      if (node.op === '-') return -derefNumber(val, state);
+      if (node.op === '-') {
+        const t = typeName(val, state);
+        if (t !== 'int' && t !== 'float' && t !== 'bool') {
+          throw new PyTypeError(`bad operand type for unary -: '${t}' (line ${node.line})`);
+        }
+        if (t === 'float') {
+          return allocFloat(-derefNumber(val, state), state);
+        }
+        if (typeof val === 'bigint') return -val;
+        return -derefNumber(val, state);
+      }
       return derefNumber(val, state);
     }
     case 'BoolOp': {
@@ -503,7 +848,7 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
     case 'Compare': {
       const left = evalExpr(node.left, state);
       const right = evalExpr(node.right, state);
-      return compareOp(node.op, left, right, state);
+      return compareOp(node.op, left, right, state, node.line);
     }
     case 'Subscript': {
       const objId = evalExpr(node.object, state);
@@ -519,9 +864,36 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
       if (node.attr === 'iloc') return frameIlocSlice(objId as string, start, stop, state, node.line);
       return sliceGet(objId, start, stop, state, node.line);
     }
-    case 'Attribute':
-      // Method references are only ever immediately called; resolve in evalCall.
-      throw new Error(`RuntimeError: unsupported expression ${node.kind}`);
+    case 'Attribute': {
+      const objVal = evalExpr(node.object, state);
+      if (objVal === null) {
+        throw new PyAttributeError(`'NoneType' object has no attribute '${node.attr}' (line ${node.line})`);
+      }
+      if (typeof objVal === 'string' && state.heap[objVal]) {
+        const obj = state.heap[objVal];
+        if (obj.type === 'type') {
+          if (node.attr === '__name__') {
+            return (obj.value as { name: string }).name;
+          }
+        }
+        if (obj.type === 'module') {
+          const modVal = obj.value as { name: string; fields?: Record<string, unknown> };
+          if (modVal.name === 'math') {
+            if (node.attr in MATH_CONSTANTS) return allocFloat(MATH_CONSTANTS[node.attr]!, state);
+            if (node.attr in MATH_FUNCTIONS) {
+              const fnObj = allocObject('builtin', `math.${node.attr}`, `math.${node.attr}`, 'heap');
+              state.heap[fnObj.id] = fnObj;
+              return fnObj.id;
+            }
+          }
+          if (modVal.fields && node.attr in modVal.fields) {
+            return modVal.fields[node.attr] as RtValue;
+          }
+        }
+      }
+      const t = typeName(objVal, state);
+      throw new PyAttributeError(`'${t}' object has no attribute '${node.attr}' (line ${node.line})`);
+    }
     case 'Call': {
       return evalCall(node, state);
     }
@@ -535,7 +907,7 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
       return evalExpr(node.value, state);
     }
     default:
-      throw new Error(`RuntimeError: unsupported expression ${node.kind}`);
+      throw new PyException('RuntimeError', `unsupported expression ${node.kind}`);
   }
 }
 
@@ -556,18 +928,40 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
       return lengthOf(args[0], state);
     }
     if (name === 'type') {
-      return typeName(args[0], state);
+      return getTypeObject(typeName(args[0], state), state);
     }
     if (name === 'id') {
-      return typeof args[0] === 'string' && state.heap[args[0] as string]
-        ? `id(${args[0]})`
-        : String(args[0]);
+      return getObjectId(args[0], state);
     }
     if (name === 'int') {
-      return Math.trunc(derefNumber(args[0], state));
+      if (args.length === 0) return 0;
+      const v = args[0];
+      if (typeof v === 'string') {
+        const s = state.heap[v] && state.heap[v].type === 'str' ? (state.heap[v].value as string) : v;
+        if (!/^\s*[-+]?[0-9]+\s*$/.test(s)) {
+          throw new PyValueError(`invalid literal for int() with base 10: '${s}' (line ${node.line})`);
+        }
+        return parseInt(s.trim(), 10);
+      }
+      if (typeof v === 'number') return Math.trunc(v);
+      if (typeof v === 'bigint') return v;
+      if (typeof v === 'boolean') return v ? 1 : 0;
+      return Math.trunc(derefNumber(v, state));
+    }
+    if (name === 'float') {
+      if (args.length === 0) return allocFloat(0.0, state);
+      const v = args[0];
+      if (typeof v === 'string') {
+        const s = state.heap[v] && state.heap[v].type === 'str' ? (state.heap[v].value as string) : v;
+        const n = Number(s);
+        if (isNaN(n)) throw new PyValueError(`could not convert string to float: '${s}' (line ${node.line})`);
+        return allocFloat(n, state);
+      }
+      return allocFloat(Number(derefNumber(v, state)), state);
     }
     if (name === 'str') {
-      return displayValue(args[0], state);
+      if (args.length === 0) return allocString('', state);
+      return allocString(printArg(args[0], state), state);
     }
     if (name === 'bool') {
       return truthy(args[0], state);
@@ -587,26 +981,50 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
     if (name === 'filter') {
       return makeMapFilter(args, state, node.line, true);
     }
-    if (name === 'reduce') {
-      return reduce(args, state, node.line);
-    }
     if (name === 'list') {
-      const obj = allocObject('list', Array.isArray(args[0]) ? [...(args[0] as unknown as RtValue[])] : [], '');
-      state.heap[obj.id] = obj;
-      // list(iterable) — only list/tuple/set
-      if (typeof args[0] === 'string' && state.heap[args[0] as string]) {
-        const src = state.heap[args[0] as string];
-        if (['list', 'tuple', 'set'].includes(src.type)) {
-          obj.value = [...(src.value as RtValue[])];
+      const elts: RtValue[] = [];
+      if (args.length > 0) {
+        const arg = args[0];
+        if (typeof arg === 'string' && state.heap[arg]) {
+          const src = state.heap[arg];
+          if (src.type === 'str') {
+            for (const ch of src.value as string) elts.push(allocString(ch, state));
+          } else if (src.type === 'range') {
+            const r = src.value as RangeValue;
+            const len = rangeLength(r);
+            for (let i = 0; i < len; i++) elts.push(rangeGetItem(r, i));
+          } else if (Array.isArray(src.value)) {
+            elts.push(...(src.value as RtValue[]));
+          }
+        } else if (typeof arg === 'string') {
+          for (const ch of arg) elts.push(allocString(ch, state));
         }
       }
+      const obj = allocObject('list', elts, '');
+      state.heap[obj.id] = obj;
       obj.repr = formatObject(obj, state);
       return obj.id;
     }
     if (name === 'dict') {
       const pairs: Array<[string, RtValue]> = [];
-      if (typeof args[0] === 'string' && state.heap[args[0] as string]?.type === 'dict') {
-        pairs.push(...(state.heap[args[0] as string].value as Array<[string, RtValue]>));
+      if (args.length > 0) {
+        const arg = args[0];
+        if (typeof arg === 'string' && state.heap[arg]) {
+          const src = state.heap[arg];
+          if (src.type === 'list' || src.type === 'tuple') {
+            for (const item of src.value as RtValue[]) {
+              const itemObj = typeof item === 'string' ? state.heap[item] : null;
+              if (itemObj && (itemObj.type === 'list' || itemObj.type === 'tuple')) {
+                const pair = itemObj.value as RtValue[];
+                if (pair.length >= 2) {
+                  pairs.push([dictKeyRepr(pair[0], state, node.line), pair[1]!]);
+                }
+              }
+            }
+          } else if (src.type === 'dict') {
+            pairs.push(...(src.value as Array<[string, RtValue]>));
+          }
+        }
       }
       const obj = allocObject('dict', pairs, '');
       state.heap[obj.id] = obj;
@@ -614,15 +1032,17 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
       return obj.id;
     }
     if (name === 'set') {
-      const seen = new Map<string, RtValue>();
-      const src = typeof args[0] === 'string' ? state.heap[args[0] as string] : undefined;
+      const elts: RtValue[] = [];
+      const src = typeof args[0] === 'string' ? state.heap[args[0]] : undefined;
       if (src && ['list', 'tuple', 'set'].includes(src.type)) {
         for (const v of src.value as RtValue[]) {
-          const key = displayValue(v, state);
-          if (!seen.has(key)) seen.set(key, v);
+          const key = dictKeyRepr(v, state, node.line);
+          if (!elts.some((e) => dictKeyRepr(e, state) === key)) {
+            elts.push(v);
+          }
         }
       }
-      const obj = allocObject('set', [...seen.values()], '');
+      const obj = allocObject('set', elts, '');
       state.heap[obj.id] = obj;
       obj.repr = formatObject(obj, state);
       return obj.id;
@@ -642,8 +1062,28 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
 
   if (node.func.kind === 'Attribute') {
     const method = node.func.attr;
-    const objId = evalExpr(node.func.object, state);
-    return callMethod(objId, method, args, state, node.line);
+    const objVal = evalExpr(node.func.object, state);
+    if (objVal === null) {
+      throw new PyAttributeError(`'NoneType' object has no attribute '${method}' (line ${node.line})`);
+    }
+    if (typeof objVal === 'string' && state.heap[objVal]?.type === 'module') {
+      const mod = state.heap[objVal];
+      const modName = (mod.value as { name: string }).name;
+      if (modName === 'math') {
+        if (method in MATH_FUNCTIONS) {
+          const res = MATH_FUNCTIONS[method](
+            ...args.map((a) => (typeof a === 'string' && state.heap[a]?.type === 'float' ? state.heap[a].value : a))
+          );
+          if (['factorial', 'gcd', 'comb', 'floor', 'ceil'].includes(method)) {
+            return Math.trunc(Number(res));
+          }
+          if (method === 'isclose') return Boolean(res);
+          return allocFloat(Number(res), state);
+        }
+        throw new PyAttributeError(`module 'math' has no attribute '${method}' (line ${node.line})`);
+      }
+    }
+    return callMethod(objVal, method, args, state, node.line);
   }
 
   const fnVal = evalExpr(node.func, state);
@@ -654,25 +1094,47 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
  * Call a user-defined function (heap function object).
  */
 function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, line: number): RtValue {
+  if (state.frames.length >= 100) {
+    throw new PyRecursionError(`maximum recursion depth exceeded (line ${line})`);
+  }
   const fn = state.heap[fnId as string];
   if (!fn || fn.type !== 'function') {
-    throw new Error(`TypeError: object is not callable (line ${line})`);
+    if (fn && fn.type === 'builtin') {
+      const bName = fn.value as string;
+      if (bName.startsWith('math.')) {
+        const mFn = bName.slice(5);
+        if (mFn in MATH_FUNCTIONS) {
+          const res = MATH_FUNCTIONS[mFn](
+            ...args.map((a) => (typeof a === 'string' && state.heap[a]?.type === 'float' ? state.heap[a].value : a))
+          );
+          if (['factorial', 'gcd', 'comb', 'floor', 'ceil'].includes(mFn)) {
+            return Math.trunc(Number(res));
+          }
+          if (mFn === 'isclose') return Boolean(res);
+          return allocFloat(Number(res), state);
+        }
+      }
+    }
+    throw new PyTypeError(`object is not callable (line ${line})`);
   }
-  const { name, params, body, async: isAsync } = fn.value as FunctionCode;
-  if (args.length !== params.length) {
-    throw new Error(
-      `TypeError: ${name}() takes ${params.length} positional argument(s) but ${args.length} were given (line ${line})`,
-    );
-  }
-  // Calling a coroutine function does NOT run it — it returns a suspended
-  // coroutine object (the whole point of async: the body runs later, on ticks).
+  const { name, params, paramDefaults, body, async: isAsync } = fn.value as FunctionCode;
   if (isAsync) {
     return makeCoroutine(name, params, body, args, fnId as string, state);
   }
-  const frame: Frame = { name, locals: {} };
-  params.forEach((p, i) => {
-    frame.locals[p] = args[i];
-  });
+
+  const scope = analyzeLocals(body);
+  const frame: Frame & { scopeInfo?: ScopeInfo } = { name, locals: {}, scopeInfo: scope };
+  for (let i = 0; i < params.length; i++) {
+    const p = params[i]!;
+    if (i < args.length) {
+      frame.locals[p] = args[i]!;
+    } else if (paramDefaults && p in paramDefaults) {
+      frame.locals[p] = paramDefaults[p]!;
+    } else {
+      throw new PyTypeError(`${name}() missing required positional argument: '${p}' (line ${line})`);
+    }
+  }
+
   state.frames.push(frame);
   try {
     for (const stmt of body) {
@@ -680,13 +1142,12 @@ function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, li
     }
   } catch (err) {
     if (err instanceof PyReturn) {
-      state.frames.pop();
       return err.value;
     }
-    state.frames.pop();
     throw err;
+  } finally {
+    state.frames.pop();
   }
-  state.frames.pop();
   return null;
 }
 
@@ -770,108 +1231,22 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
   }
 
   if (obj.type === 'list') {
-    const value = obj.value as RtValue[];
-    if (method === 'append') {
-      value.push(args[0]);
-      obj.repr = formatObject(obj, state);
-      return null;
-    }
-    if (method === 'pop') {
-      if (value.length === 0) {
-        throw new Error(`IndexError: pop from empty list (line ${line})`);
-      }
-      const popped = value.pop() as RtValue;
-      obj.repr = formatObject(obj, state);
-      return popped;
-    }
-    if (method === 'extend') {
-      const src = state.heap[args[0] as string];
-      if (!src || !['list', 'tuple', 'set'].includes(src.type)) {
-        throw new Error(`TypeError: extend() requires an iterable (line ${line})`);
-      }
-      value.push(...(src.value as RtValue[]));
-      obj.repr = formatObject(obj, state);
-      return null;
-    }
-    if (method === 'insert') {
-      value.splice(Number(args[0]), 0, args[1]);
-      obj.repr = formatObject(obj, state);
-      return null;
-    }
-    if (method === 'remove') {
-      const idx = findIndexOfValue(value, args[0], state);
-      if (idx < 0) throw new Error(`ValueError: list.remove(x): x not in list (line ${line})`);
-      value.splice(idx, 1);
-      obj.repr = formatObject(obj, state);
-      return null;
-    }
-    if (method === 'clear') {
-      obj.value = [];
-      obj.repr = formatObject(obj, state);
-      return null;
-    }
-    if (method === 'copy') {
-      const clone = allocObject('list', [...value], '');
-      state.heap[clone.id] = clone;
-      clone.repr = formatObject(clone, state);
-      return clone.id;
-    }
+    return callListMethod(objId as string, method, args, state, line, valuesEqual, formatObject);
   }
 
-  if (obj.type === 'dict') {
-    const entries = obj.value as Array<[string, RtValue]>;
-    if (method === 'keys') {
-      const keys = entries.map(([k]) => k);
-      const out = allocObject('list', keys.map((k) => keyToValue(k, state)), '');
-      // store string keys as heap strings for display fidelity
-      out.value = entries.map(([k]) => allocString(k, state));
-      out.repr = formatObject(out, state);
-      return out.id;
-    }
-    if (method === 'get') {
-      const keyRepr = dictKeyRepr(args[0], state);
-      const found = entries.find(([k]) => k === keyRepr);
-      return found ? found[1] : (args.length > 1 ? args[1] : null);
-    }
-    if (method === 'update') {
-      const src = state.heap[args[0] as string];
-      if (!src || src.type !== 'dict') throw new Error(`TypeError: update() requires a dict (line ${line})`);
-      const srcEntries = src.value as Array<[string, RtValue]>;
-      for (const [k, v] of srcEntries) {
-        const existing = entries.find(([ek]) => ek === k);
-        if (existing) existing[1] = v;
-        else entries.push([k, v]);
-      }
-      obj.repr = formatObject(obj, state);
-      return null;
-    }
-    if (method === 'pop') {
-      const keyRepr = dictKeyRepr(args[0], state);
-      const idx = entries.findIndex(([k]) => k === keyRepr);
-      if (idx < 0) {
-        if (args.length > 1) return args[1];
-        throw new Error(`KeyError: ${keyRepr} (line ${line})`);
-      }
-      const [, v] = entries.splice(idx, 1)[0];
-      obj.repr = formatObject(obj, state);
-      return v;
-    }
-    if (method === 'copy') {
-      const clone = allocObject('dict', entries.map(([k, v]) => [k, v] as [string, RtValue]), '');
-      state.heap[clone.id] = clone;
-      clone.repr = formatObject(clone, state);
-      return clone.id;
-    }
+  if (obj.type === 'dict' || obj.type === 'defaultdict') {
+    return callDictMethod(objId as string, method, args, state, line, formatObject);
+  }
+
+  if (obj.type === 'set') {
+    return callSetMethod(objId as string, method, args, state, line, formatObject);
   }
 
   if (obj.type === 'str') {
-    // methods on string objects stored as heap ids
-    const s = obj.value as string;
-    if (method === 'upper') return allocString(s.toUpperCase(), state);
-    if (method === 'lower') return allocString(s.toLowerCase(), state);
+    return callStrMethod(objId as string, method, args, state, line, allocString, formatObject);
   }
 
-  throw new Error(`AttributeError: '${obj.type}' object has no attribute '${method}' (line ${line})`);
+  throw new PyAttributeError(`'${obj.type}' object has no attribute '${method}' (line ${line})`);
 }
 
 /**
@@ -1032,9 +1407,10 @@ function bareBuiltinName(v: RtValue, state: MemoryState, line: number): string {
   if (typeof v === 'string' && state.heap[v]) {
     const o = state.heap[v];
     if (o.type === 'builtin') return o.value as string;
-    throw new Error(`TypeError: expected a bare builtin, got a ${o.type} (line ${line})`);
+    if (o.type === 'type') return (o.value as { name: string }).name;
+    throw new PyTypeError(`expected a bare builtin, got a ${o.type} (line ${line})`);
   }
-  throw new Error(`TypeError: expected a bare builtin (e.g. list or int), not ${typeName(v, state)} (line ${line})`);
+  throw new PyTypeError(`expected a bare builtin (e.g. list or int), not ${typeName(v, state)} (line ${line})`);
 }
 
 /**
@@ -1094,9 +1470,9 @@ function makeMapFilter(args: RtValue[], state: MemoryState, line: number, isFilt
 function resolveCallableName(v: RtValue, state: MemoryState, line: number): string {
   if (typeof v === 'string' && state.heap[v]) {
     const o = state.heap[v];
-    if (o.type === 'builtin' || o.type === 'function') return v;
+    if (o.type === 'builtin' || o.type === 'function' || o.type === 'type') return v;
   }
-  throw new Error(`TypeError: first argument must be a function (line ${line})`);
+  throw new PyTypeError(`first argument must be a function (line ${line})`);
 }
 
 /** Ensure an argument is an iterator object (auto-wrap iterables with iter()). */
@@ -1106,7 +1482,7 @@ function ensureIterator(v: RtValue, state: MemoryState, line: number): string {
     if (isIteratorType(t)) return v;
     if (isIterableType(t)) return makeIterator(v, state, line) as string;
   }
-  throw new Error(`TypeError: argument of type '${typeName(v, state)}' is not iterable (line ${line})`);
+  throw new PyTypeError(`argument of type '${typeName(v, state)}' is not iterable (line ${line})`);
 }
 
 /**
@@ -1133,12 +1509,12 @@ function applyBuiltinCall(fnId: string, args: RtValue[], state: MemoryState, lin
   const fn = state.heap[fnId];
   if (!fn) throw new Error(`RuntimeError: function reference was released (line ${line})`);
   if (fn.type === 'function') return callUserFunction(fnId, args, state, line);
-  if (fn.type === 'builtin') {
-    const b = fn.value as string;
+  if (fn.type === 'builtin' || fn.type === 'type') {
+    const b = fn.type === 'type' ? (fn.value as { name: string }).name : (fn.value as string);
     const a = args[0];
     if (b === 'int') return Math.trunc(derefNumber(a, state));
-    if (b === 'float') return Number(a);
-    if (b === 'str') return displayValue(a, state);
+    if (b === 'float') return allocFloat(derefNumber(a, state), state);
+    if (b === 'str') return allocString(displayValue(a, state), state);
     if (b === 'bool') return truthy(a, state);
     if (b === 'list' || b === 'tuple' || b === 'set') {
       const o = allocObject(b, Array.isArray(a) ? [...(a as unknown as RtValue[])] : [a], '');
@@ -1148,9 +1524,9 @@ function applyBuiltinCall(fnId: string, args: RtValue[], state: MemoryState, lin
     }
     if (b === 'len') return lengthOf(a, state);
     if (b === 'abs') return Math.abs(derefNumber(a, state));
-    throw new Error(`TypeError: builtin '${b}' is not supported here (line ${line})`);
+    throw new PyTypeError(`builtin '${b}' is not supported here (line ${line})`);
   }
-  throw new Error(`TypeError: object of type '${fn.type}' is not callable (line ${line})`);
+  throw new PyTypeError(`object of type '${fn.type}' is not callable (line ${line})`);
 }
 
 /**
@@ -1198,8 +1574,14 @@ interface NdarrayValue {
   view: boolean;
 }
 
-/** numpy-style repr of a number run: `[1. 2. 3.]` (float-ish, trailing dot). */
-function numpyRepr(data: number[]): string {
+/** numpy-style repr of a number run. Right-pads integers; adds trailing dot to floats. */
+function numpyRepr(data: number[], dtype: string = 'float64'): string {
+  if (dtype === 'int64' || dtype === 'int32') {
+    const strs = data.map(String);
+    const maxLen = Math.max(...strs.map((s) => s.length), 1);
+    const padded = strs.map((s) => s.padStart(maxLen, ' '));
+    return `[${padded.join(' ')}]`;
+  }
   const body = data.map((n) => (Number.isInteger(n) ? `${n}.` : String(n)));
   return `[${body.join(' ')}]`;
 }
@@ -1222,12 +1604,20 @@ function makeBuffer(data: number[], dtype: string, state: MemoryState): string {
  * `np.array([...])` → a fresh buffer + an ndarray that owns its full buffer.
  */
 function makeNdarray(args: RtValue[], state: MemoryState, line: number): RtValue {
-  if (args.length !== 1) throw new Error(`TypeError: array() takes exactly one argument (line ${line})`);
+  if (args.length !== 1) throw new PyTypeError(`array() takes exactly one argument (line ${line})`);
   const data = readNumberSeries(args[0], state);
-  const bufId = makeBuffer(data, 'float64', state);
-  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype: 'float64', view: false } as NdarrayValue, '');
+  const listObj = typeof args[0] === 'string' ? state.heap[args[0]] : null;
+  const hasFloat =
+    listObj &&
+    Array.isArray(listObj.value) &&
+    (listObj.value as RtValue[]).some(
+      (e) => typeof e === 'string' && state.heap[e]?.type === 'float'
+    );
+  const dtype = hasFloat ? 'float64' : 'int64';
+  const bufId = makeBuffer(data, dtype, state);
+  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype, view: false } as NdarrayValue, '');
   state.heap[obj.id] = obj;
-  obj.repr = numpyRepr(data);
+  obj.repr = numpyRepr(data, dtype);
   return obj.id;
 }
 
@@ -1237,12 +1627,13 @@ function makeNdarray(args: RtValue[], state: MemoryState, line: number): RtValue
  */
 function copyNdarray(ndId: string, state: MemoryState, line: number): RtValue {
   const nd = state.heap[ndId];
-  if (!nd || nd.type !== 'ndarray') throw new Error(`TypeError: ${typeName(ndId, state)} has no .copy() (line ${line})`);
+  if (!nd || nd.type !== 'ndarray') throw new PyTypeError(`${typeName(ndId, state)} has no .copy() (line ${line})`);
   const data = ndarrayWindow(ndId, state);
-  const bufId = makeBuffer([...data], (nd.value as NdarrayValue).dtype, state);
-  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype: 'float64', view: false } as NdarrayValue, '');
+  const dtype = (nd.value as NdarrayValue).dtype;
+  const bufId = makeBuffer([...data], dtype, state);
+  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype, view: false } as NdarrayValue, '');
   state.heap[obj.id] = obj;
-  obj.repr = numpyRepr(data);
+  obj.repr = numpyRepr(data, dtype);
   return obj.id;
 }
 
@@ -1253,7 +1644,7 @@ function copyNdarray(ndId: string, state: MemoryState, line: number): RtValue {
  */
 function ndarraySlice(ndId: string, start: RtValue, stop: RtValue, state: MemoryState, line: number): RtValue {
   const nd = state.heap[ndId];
-  if (!nd || nd.type !== 'ndarray') throw new Error(`TypeError: ${typeName(ndId, state)} is not sliceable (line ${line})`);
+  if (!nd || nd.type !== 'ndarray') throw new PyTypeError(`${typeName(ndId, state)} is not sliceable (line ${line})`);
   const v = nd.value as NdarrayValue;
   const full = (state.heap[v.buffer].value as NumpyBufferValue).data;
   const s = start === null ? 0 : Number(start);
@@ -1262,9 +1653,26 @@ function ndarraySlice(ndId: string, start: RtValue, stop: RtValue, state: Memory
   const shape = Math.max(0, e - s);
   const obj = allocObject('ndarray', { buffer: v.buffer, offset, shape, dtype: v.dtype, view: true } as NdarrayValue, '');
   state.heap[obj.id] = obj;
-  obj.repr = numpyRepr(full.slice(offset, offset + shape));
+  obj.repr = numpyRepr(full.slice(offset, offset + shape), v.dtype);
   void line;
   return obj.id;
+}
+
+/**
+ * In-place vector addition for `+=`. Writes directly through the window to the shared buffer.
+ */
+function vecAddInPlace(ndId: string, right: RtValue, state: MemoryState, line: number): void {
+  const a = state.heap[ndId];
+  if (!a || a.type !== 'ndarray') throw new PyTypeError(`unsupported operand for += (line ${line})`);
+  const b = Number(right);
+  if (Number.isNaN(b)) throw new PyTypeError(`cannot add ${typeName(right, state)} to ndarray (line ${line})`);
+  const v = a.value as NdarrayValue;
+  const buffer = state.heap[v.buffer];
+  const bufData = (buffer.value as NumpyBufferValue).data;
+  for (let i = 0; i < v.shape; i++) {
+    bufData[v.offset + i] += b;
+  }
+  refreshNdarrayReprs(state);
 }
 
 /**
@@ -1273,14 +1681,15 @@ function ndarraySlice(ndId: string, start: RtValue, stop: RtValue, state: Memory
  */
 function vecAdd(left: RtValue, right: RtValue, state: MemoryState, line: number): RtValue {
   const a = state.heap[left as string];
-  if (!a || a.type !== 'ndarray') throw new Error(`TypeError: unsupported operand (line ${line})`);
+  if (!a || a.type !== 'ndarray') throw new PyTypeError(`unsupported operand (line ${line})`);
   const b = Number(right);
-  if (Number.isNaN(b)) throw new Error(`TypeError: cannot add ${typeName(right, state)} to ndarray (line ${line})`);
+  if (Number.isNaN(b)) throw new PyTypeError(`cannot add ${typeName(right, state)} to ndarray (line ${line})`);
+  const dtype = (a.value as NdarrayValue).dtype;
   const data = ndarrayWindow(left as string, state).map((n) => n + b);
-  const bufId = makeBuffer(data, 'float64', state);
-  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype: 'float64', view: false } as NdarrayValue, '');
+  const bufId = makeBuffer(data, dtype, state);
+  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype, view: false } as NdarrayValue, '');
   state.heap[obj.id] = obj;
-  obj.repr = numpyRepr(data);
+  obj.repr = numpyRepr(data, dtype);
   return obj.id;
 }
 
@@ -1812,6 +2221,9 @@ function frameRowCount(v: { length?: number; index?: string[] }): number {
  * value, so normalize on read and on lookup.
  */
 function colName(label: string): string {
+  if (label.startsWith('str:')) {
+    return label.slice(4);
+  }
   if (label.startsWith("'") && label.endsWith("'") && label.length >= 2) {
     return label.slice(1, -1).replace(/\\'/g, "'").replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
   }
@@ -1939,12 +2351,12 @@ function frameGetColumn(dfId: string, key: RtValue, state: MemoryState, line: nu
   if (isList) {
     for (const e of state.heap[key].value as RtValue[]) {
       const c = colName(displayValue(e, state));
-      if (!v.columns.includes(c)) throw new Error(`KeyError: column '${c}' (line ${line})`);
+      if (!v.columns.includes(c)) throw new PyKeyError(`column '${c}' (line ${line})`);
       cols.push(c);
     }
   } else {
     const c = colName(displayValue(key, state));
-    if (!v.columns.includes(c)) throw new Error(`KeyError: column '${c}' (line ${line})`);
+    if (!v.columns.includes(c)) throw new PyKeyError(`column '${c}' (line ${line})`);
     cols.push(c);
   }
 
@@ -2272,57 +2684,55 @@ function formatStr(s: string): string {
 }
 
 /**
- * Canonical dict key label.
- */
-function dictKeyRepr(k: RtValue, state: MemoryState): string {
-  return displayValue(k, state);
-}
-
-/**
- * Rebuild a runtime string value from a dict key label.
- */
-function keyToValue(keyRepr: string, state: MemoryState): string {
-  let s = keyRepr;
-  if (s.startsWith("'") && s.endsWith("'")) {
-    s = s.slice(1, -1).replace(/\\'/g, "'").replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
-  }
-  return allocString(s, state);
-}
-
-/**
- * Value equality via display form.
+ * Value equality for Python semantics (handles True == 1, 2 == 2.0, containers).
  */
 function valuesEqual(a: RtValue, b: RtValue, state: MemoryState): boolean {
-  return displayValue(a, state) === displayValue(b, state);
-}
-
-/**
- * Index of first value equal to `target`.
- */
-function findIndexOfValue(arr: RtValue[], target: RtValue, state: MemoryState): number {
-  for (let i = 0; i < arr.length; i++) {
-    if (valuesEqual(arr[i], target, state)) return i;
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  const at = typeName(a, state);
+  const bt = typeName(b, state);
+  if ((at === 'int' || at === 'float' || at === 'bool') && (bt === 'int' || bt === 'float' || bt === 'bool')) {
+    const an = a === true ? 1 : a === false ? 0 : derefNumber(a, state);
+    const bn = b === true ? 1 : b === false ? 0 : derefNumber(b, state);
+    return an === bn;
   }
-  return -1;
+  if (at === 'str' && bt === 'str') {
+    const as = state.heap[a as string]?.value as string ?? String(a);
+    const bs = state.heap[b as string]?.value as string ?? String(b);
+    return as === bs;
+  }
+  if (at !== bt) return false;
+  if (at === 'list' || at === 'tuple' || at === 'set') {
+    const aa = state.heap[a as string].value as RtValue[];
+    const ba = state.heap[b as string].value as RtValue[];
+    if (aa.length !== ba.length) return false;
+    return aa.every((v, i) => valuesEqual(v, ba[i]!, state));
+  }
+  return false;
 }
 
 function truthy(v: RtValue, state: MemoryState): boolean {
-  if (v === null || v === false || v === 0 || v === '') return false;
+  if (v === null || v === false || v === 0 || v === 0n || v === '') return false;
   if (typeof v === 'string' && state.heap[v]) {
     const obj = state.heap[v];
     if (obj.type === 'list' || obj.type === 'tuple' || obj.type === 'set') return (obj.value as RtValue[]).length > 0;
     if (obj.type === 'dict' || obj.type === 'defaultdict') return dictEntries(obj).length > 0;
     if (obj.type === 'str') return (obj.value as string).length > 0;
+    if (obj.type === 'range') return rangeLength(obj.value as RangeValue) > 0;
+    if (obj.type === 'float') return (obj.value as number) !== 0;
   }
   return Boolean(v);
 }
 
 function derefNumber(v: RtValue, state: MemoryState): number {
-  // A string is a heap object now; dereference to its text so `int('3')`,
-  // arithmetic, and `range`-style numeric coercion still read the value, not the
-  // object id.
-  if (typeof v === 'string' && state.heap[v]?.type === 'str') {
-    return Number(state.heap[v].value);
+  if (typeof v === 'number') return v;
+  if (typeof v === 'bigint') return Number(v);
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  if (typeof v === 'string' && state.heap[v]) {
+    const obj = state.heap[v];
+    if (obj.type === 'str') return Number(obj.value);
+    if (obj.type === 'float') return obj.value as number;
+    if (obj.type === 'int') return Number(obj.value);
   }
   return Number(v);
 }
@@ -2333,10 +2743,11 @@ function lengthOf(v: RtValue, state: MemoryState): number {
     if (['list', 'tuple', 'set', 'dict'].includes(obj.type)) return (obj.value as unknown[]).length;
     if (obj.type === 'defaultdict') return dictEntries(obj).length;
     if (obj.type === 'ndarray') return (obj.value as NdarrayValue).shape;
-    if (obj.type === 'str') return (obj.value as string).length;
+    if (obj.type === 'str') return Array.from(obj.value as string).length;
+    if (obj.type === 'range') return rangeLength(obj.value as RangeValue);
   }
-  if (typeof v === 'string') return v.length;
-  throw new Error(`TypeError: object has no len()`);
+  if (typeof v === 'string') return Array.from(v).length;
+  throw new PyTypeError(`object has no len()`);
 }
 
 /**
@@ -2357,26 +2768,17 @@ function readNumberSeries(v: RtValue, state: MemoryState): number[] {
     const obj = state.heap[v];
     if (['list', 'tuple', 'set'].includes(obj.type)) {
       return (obj.value as RtValue[]).map((e) => {
-        const n = Number(e);
-        if (Number.isNaN(n)) throw new Error('TypeError: expected numeric points');
+        const n = derefNumber(e, state);
+        if (Number.isNaN(n)) throw new PyTypeError('expected numeric points');
         return n;
       });
     }
-    throw new Error(`TypeError: ${obj.type} is not an iterable of numbers`);
+    throw new PyTypeError(`${obj.type} is not an iterable of numbers`);
   }
-  throw new Error('TypeError: expected a list of numbers');
-}
-
-function typeName(v: RtValue, state: MemoryState): string {
-  if (typeof v === 'string' && state.heap[v]) return state.heap[v].type;
-  if (v === null) return 'NoneType';
-  if (typeof v === 'boolean') return 'bool';
-  if (typeof v === 'number') return Number.isInteger(v) ? 'int' : 'float';
-  return typeof v;
+  throw new PyTypeError('expected a list of numbers');
 }
 
 function binOp(op: string, left: RtValue, right: RtValue, state: MemoryState, line: number): RtValue {
-  // string concatenation
   const lt = typeName(left, state);
   const rt = typeName(right, state);
 
@@ -2384,60 +2786,211 @@ function binOp(op: string, left: RtValue, right: RtValue, state: MemoryState, li
   if (op === '+' && (lt === 'ndarray' || rt === 'ndarray')) {
     const scalar = lt === 'ndarray' ? right : left;
     const arr = lt === 'ndarray' ? left : right;
-    if (typeof scalar !== 'number') throw new Error(`TypeError: unsupported operand for + (line ${line})`);
+    if (typeof scalar !== 'number') throw new PyTypeError(`unsupported operand for + (line ${line})`);
     return vecAdd(arr, scalar, state, line);
   }
 
-  if (op === '+' && lt === 'str' && rt === 'str') {
-    const lv = state.heap[left as string].value as string;
-    const rv = state.heap[right as string].value as string;
-    return allocString(lv + rv, state);
-  }
-  if (op === '+' && lt === 'list' && rt === 'list') {
-    const merged = [...(state.heap[left as string].value as RtValue[]), ...(state.heap[right as string].value as RtValue[])];
-    const obj = allocObject('list', merged, '');
-    state.heap[obj.id] = obj;
-    obj.repr = formatObject(obj, state);
-    return obj.id;
-  }
-  if (op === '*' && lt === 'list' && rt === 'int') {
-    const n = Number(right);
-    const src = state.heap[left as string].value as RtValue[];
-    const merged: RtValue[] = [];
-    for (let i = 0; i < n; i++) merged.push(...src);
-    const obj = allocObject('list', merged, '');
-    state.heap[obj.id] = obj;
-    obj.repr = formatObject(obj, state);
-    return obj.id;
-  }
-  if (op === '*' && lt === 'str' && rt === 'int') {
-    return allocString((state.heap[left as string].value as string).repeat(Number(right)), state);
+  // String formatting with %: e.g. '%d' % 1
+  if (op === '%' && lt === 'str') {
+    const formatStr = state.heap[left as string]?.value as string ?? String(left);
+    const formatted = formatStr.replace(/%[sdrf]/g, () => printArg(right, state));
+    return allocString(formatted, state);
   }
 
-  const a = Number(left);
-  const b = Number(right);
+  // Strings
+  if (lt === 'str' || rt === 'str') {
+    if (op === '+' && lt === 'str' && rt === 'str') {
+      const lv = state.heap[left as string]?.value as string ?? String(left);
+      const rv = state.heap[right as string]?.value as string ?? String(right);
+      return allocString(lv + rv, state);
+    }
+    if (op === '+' && lt === 'str') {
+      throw new PyTypeError(`can only concatenate str (not "${rt}") to str (line ${line})`);
+    }
+    if (op === '+' && rt === 'str') {
+      throw new PyTypeError(`unsupported operand type(s) for +: '${lt}' and 'str' (line ${line})`);
+    }
+    if (op === '*' && lt === 'str' && rt === 'int') {
+      const s = state.heap[left as string]?.value as string ?? String(left);
+      return allocString(s.repeat(Math.max(0, Number(right))), state);
+    }
+    if (op === '*' && lt === 'int' && rt === 'str') {
+      const s = state.heap[right as string]?.value as string ?? String(right);
+      return allocString(s.repeat(Math.max(0, Number(left))), state);
+    }
+    throw new PyTypeError(`unsupported operand type(s) for ${op}: '${lt}' and '${rt}' (line ${line})`);
+  }
+
+  // Lists
+  if (lt === 'list' || rt === 'list') {
+    if (op === '+' && lt === 'list' && rt === 'list') {
+      const merged = [
+        ...(state.heap[left as string].value as RtValue[]),
+        ...(state.heap[right as string].value as RtValue[]),
+      ];
+      const obj = allocObject('list', merged, '');
+      state.heap[obj.id] = obj;
+      obj.repr = formatObject(obj, state);
+      return obj.id;
+    }
+    if (op === '+' && lt === 'list') {
+      throw new PyTypeError(`can only concatenate list (not "${rt}") to list (line ${line})`);
+    }
+    if (op === '+' && rt === 'list') {
+      throw new PyTypeError(`can only concatenate list (not "${lt}") to list (line ${line})`);
+    }
+    if (op === '*' && lt === 'list' && rt === 'int') {
+      const n = Math.max(0, Number(right));
+      const src = state.heap[left as string].value as RtValue[];
+      const merged: RtValue[] = [];
+      for (let i = 0; i < n; i++) merged.push(...src);
+      const obj = allocObject('list', merged, '');
+      state.heap[obj.id] = obj;
+      obj.repr = formatObject(obj, state);
+      return obj.id;
+    }
+    if (op === '*' && lt === 'int' && rt === 'list') {
+      const n = Math.max(0, Number(left));
+      const src = state.heap[right as string].value as RtValue[];
+      const merged: RtValue[] = [];
+      for (let i = 0; i < n; i++) merged.push(...src);
+      const obj = allocObject('list', merged, '');
+      state.heap[obj.id] = obj;
+      obj.repr = formatObject(obj, state);
+      return obj.id;
+    }
+    throw new PyTypeError(`unsupported operand type(s) for ${op}: '${lt}' and '${rt}' (line ${line})`);
+  }
+
+  // Tuples
+  if (lt === 'tuple' || rt === 'tuple') {
+    if (op === '+' && lt === 'tuple' && rt === 'tuple') {
+      const merged = [
+        ...(state.heap[left as string].value as RtValue[]),
+        ...(state.heap[right as string].value as RtValue[]),
+      ];
+      const obj = allocObject('tuple', merged, '');
+      state.heap[obj.id] = obj;
+      obj.repr = formatObject(obj, state);
+      return obj.id;
+    }
+    if (op === '+' && lt === 'tuple') {
+      throw new PyTypeError(`can only concatenate tuple (not "${rt}") to tuple (line ${line})`);
+    }
+    if (op === '+' && rt === 'tuple') {
+      throw new PyTypeError(`can only concatenate tuple (not "${lt}") to tuple (line ${line})`);
+    }
+    throw new PyTypeError(`unsupported operand type(s) for ${op}: '${lt}' and '${rt}' (line ${line})`);
+  }
+
+  // Numeric operations (int, float, bool)
+  const isNum = (t: string) => t === 'int' || t === 'float' || t === 'bool';
+  if (!isNum(lt) || !isNum(rt)) {
+    throw new PyTypeError(`unsupported operand type(s) for ${op}: '${lt}' and '${rt}' (line ${line})`);
+  }
+
+  const isFloat = lt === 'float' || rt === 'float';
+  const a = derefNumber(left, state);
+  const b = derefNumber(right, state);
+
+  if (op === '/') {
+    if (b === 0) throw new PyZeroDivisionError(`division by zero (line ${line})`);
+    return allocFloat(a / b, state);
+  }
+
+  if (isFloat) {
+    switch (op) {
+      case '+': return allocFloat(a + b, state);
+      case '-': return allocFloat(a - b, state);
+      case '*': return allocFloat(a * b, state);
+      case '//':
+        if (b === 0) throw new PyZeroDivisionError(`integer division or modulo by zero (line ${line})`);
+        return allocFloat(Math.floor(a / b), state);
+      case '%':
+        if (b === 0) throw new PyZeroDivisionError(`integer division or modulo by zero (line ${line})`);
+        return allocFloat(a - Math.floor(a / b) * b, state);
+      case '**': return allocFloat(a ** b, state);
+      default:
+        throw new PyException('RuntimeError', `unsupported operator ${op} (line ${line})`);
+    }
+  }
+
+  // Both are integers (int or bool)
+  const isBig =
+    typeof left === 'bigint' ||
+    typeof right === 'bigint' ||
+    (op === '**' && Number(left) >= 2 && Number(right) >= 60);
+
+  if (isBig) {
+    const ba = BigInt(left as number | bigint | boolean);
+    const bb = BigInt(right as number | bigint | boolean);
+    switch (op) {
+      case '+': return ba + bb;
+      case '-': return ba - bb;
+      case '*': return ba * bb;
+      case '//': {
+        if (bb === 0n) throw new PyZeroDivisionError(`integer division or modulo by zero (line ${line})`);
+        const div = ba / bb;
+        const rem = ba % bb;
+        return rem !== 0n && (ba < 0n !== bb < 0n) ? div - 1n : div;
+      }
+      case '%': {
+        if (bb === 0n) throw new PyZeroDivisionError(`integer division or modulo by zero (line ${line})`);
+        return ((ba % bb) + bb) % bb;
+      }
+      case '**': {
+        if (bb < 0n) return allocFloat(Number(ba) ** Number(bb), state);
+        return ba ** bb;
+      }
+      default:
+        throw new PyException('RuntimeError', `unsupported operator ${op} (line ${line})`);
+    }
+  }
+
   switch (op) {
-    case '+': return a + b;
-    case '-': return a - b;
-    case '*': return a * b;
-    case '/':
-      if (b === 0) throw new Error(`ZeroDivisionError: division by zero (line ${line})`);
-      return a / b;
+    case '+': {
+      const res = a + b;
+      return Number.isSafeInteger(res) ? res : BigInt(a) + BigInt(b);
+    }
+    case '-': {
+      const res = a - b;
+      return Number.isSafeInteger(res) ? res : BigInt(a) - BigInt(b);
+    }
+    case '*': {
+      const res = a * b;
+      return Number.isSafeInteger(res) ? res : BigInt(a) * BigInt(b);
+    }
     case '//':
-      if (b === 0) throw new Error(`ZeroDivisionError: integer division or modulo by zero (line ${line})`);
+      if (b === 0) throw new PyZeroDivisionError(`integer division or modulo by zero (line ${line})`);
       return Math.floor(a / b);
     case '%':
-      if (b === 0) throw new Error(`ZeroDivisionError: integer division or modulo by zero (line ${line})`);
+      if (b === 0) throw new PyZeroDivisionError(`integer division or modulo by zero (line ${line})`);
       return ((a % b) + b) % b;
-    case '**': return a ** b;
+    case '**': {
+      if (b < 0) return allocFloat(a ** b, state);
+      if (b >= 60 && a >= 2) return BigInt(a) ** BigInt(b);
+      const res = a ** b;
+      return Number.isSafeInteger(res) ? res : BigInt(a) ** BigInt(b);
+    }
     default:
-      throw new Error(`RuntimeError: unsupported operator ${op} (line ${line})`);
+      throw new PyException('RuntimeError', `unsupported operator ${op} (line ${line})`);
   }
 }
 
-function compareOp(op: string, left: RtValue, right: RtValue, state: MemoryState): boolean {
-  if (op === 'is') return left === right;
-  if (op === 'is not') return left !== right;
+function compareOp(op: string, left: RtValue, right: RtValue, state: MemoryState, line?: number): boolean {
+  if (op === 'is') {
+    if (left === right) return true;
+    if (left === null && right === null) return true;
+    if (typeof left === 'number' && typeof right === 'number') {
+      if (Number.isInteger(left) && Number.isInteger(right) && left === right && left >= -5 && left <= 256) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (op === 'is not') {
+    return !compareOp('is', left, right, state, line);
+  }
   if (op === '==') return valuesEqual(left, right, state);
   if (op === '!=') return !valuesEqual(left, right, state);
   if (op === 'in') {
@@ -2446,35 +2999,94 @@ function compareOp(op: string, left: RtValue, right: RtValue, state: MemoryState
       if (['list', 'tuple', 'set'].includes(container.type)) {
         return (container.value as RtValue[]).some((v) => valuesEqual(v, left, state));
       }
-      if (container.type === 'dict') {
-        return (container.value as Array<[string, RtValue]>).some(([k]) => k === dictKeyRepr(left, state));
+      if (container.type === 'dict' || container.type === 'defaultdict') {
+        const kRepr = dictKeyRepr(left, state, line);
+        return (container.value as Array<[string, RtValue]>).some(([k]) => k === kRepr);
       }
-      // substring membership: `'a' in 'abc'`
+      if (container.type === 'range') {
+        return rangeContains(container.value as RangeValue, derefNumber(left, state));
+      }
       if (container.type === 'str') {
-        return typeof left === 'string' && state.heap[left]?.type === 'str'
-          ? (container.value as string).includes(state.heap[left].value as string)
-          : false;
+        const needle = typeof left === 'string' && state.heap[left]?.type === 'str'
+          ? (state.heap[left].value as string)
+          : String(left);
+        return (container.value as string).includes(needle);
       }
     }
-    // right was a raw value (defensive; strings are heap objects now)
     if (typeof right === 'string' && typeof left === 'string') return right.includes(left);
+    throw new PyTypeError(`argument of type '${typeName(right, state)}' is not iterable${line ? ` (line ${line})` : ''}`);
   }
-  const a = Number(left);
-  const b = Number(right);
-  switch (op) {
-    case '<': return a < b;
-    case '<=': return a <= b;
-    case '>': return a > b;
-    case '>=': return a >= b;
-    default:
-      return false;
+  if (op === 'not in') {
+    return !compareOp('in', left, right, state, line);
   }
+
+  const lt = typeName(left, state);
+  const rt = typeName(right, state);
+
+  if (lt === 'str' && rt === 'str') {
+    const lv = state.heap[left as string]?.value as string ?? String(left);
+    const rv = state.heap[right as string]?.value as string ?? String(right);
+    switch (op) {
+      case '<': return lv < rv;
+      case '<=': return lv <= rv;
+      case '>': return lv > rv;
+      case '>=': return lv >= rv;
+    }
+  }
+
+  if (lt === 'list' && rt === 'list') {
+    const la = state.heap[left as string].value as RtValue[];
+    const ra = state.heap[right as string].value as RtValue[];
+    const minLen = Math.min(la.length, ra.length);
+    for (let i = 0; i < minLen; i++) {
+      if (!valuesEqual(la[i]!, ra[i]!, state)) {
+        return compareOp(op, la[i]!, ra[i]!, state, line);
+      }
+    }
+    switch (op) {
+      case '<': return la.length < ra.length;
+      case '<=': return la.length <= ra.length;
+      case '>': return la.length > ra.length;
+      case '>=': return la.length >= ra.length;
+    }
+  }
+
+  if (lt === 'tuple' && rt === 'tuple') {
+    const la = state.heap[left as string].value as RtValue[];
+    const ra = state.heap[right as string].value as RtValue[];
+    const minLen = Math.min(la.length, ra.length);
+    for (let i = 0; i < minLen; i++) {
+      if (!valuesEqual(la[i]!, ra[i]!, state)) {
+        return compareOp(op, la[i]!, ra[i]!, state, line);
+      }
+    }
+    switch (op) {
+      case '<': return la.length < ra.length;
+      case '<=': return la.length <= ra.length;
+      case '>': return la.length > ra.length;
+      case '>=': return la.length >= ra.length;
+    }
+  }
+
+  const isNumType = (t: string) => t === 'int' || t === 'float' || t === 'bool';
+  if (isNumType(lt) && isNumType(rt)) {
+    const a = derefNumber(left, state);
+    const b = derefNumber(right, state);
+    switch (op) {
+      case '<': return a < b;
+      case '<=': return a <= b;
+      case '>': return a > b;
+      case '>=': return a >= b;
+    }
+  }
+
+  throw new PyTypeError(`'${op}' not supported between instances of '${lt}' and '${rt}'${line ? ` (line ${line})` : ''}`);
 }
 
 function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: number): RtValue {
   const obj = state.heap[objId as string];
-  if (!obj) throw new Error(`TypeError: object is not subscriptable (line ${line})`);
-  // df['col'] / df[['c1','c2']] — read a column or column subset
+  if (!obj) throw new PyTypeError(`object is not subscriptable (line ${line})`);
+
   if (obj.type === 'dataframe') {
     return frameSubscript(objId as string, index, state, line);
   }
@@ -2483,24 +3095,26 @@ function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: 
     const i = Number(index);
     const idx = i < 0 ? value.length + i : i;
     if (idx < 0 || idx >= value.length) {
-      throw new Error(`IndexError: index out of range (line ${line})`);
+      throw new PyIndexError(`index out of range (line ${line})`);
     }
-    return value[idx];
+    return value[idx]!;
+  }
+  if (obj.type === 'range') {
+    return rangeGetItem(obj.value as RangeValue, Number(index));
   }
   if (obj.type === 'ndarray') {
     const v = obj.value as NdarrayValue;
     const i = Number(index);
     const idx = i < 0 ? v.shape + i : i;
-    if (idx < 0 || idx >= v.shape) throw new Error(`IndexError: index out of range (line ${line})`);
+    if (idx < 0 || idx >= v.shape) throw new PyIndexError(`index out of range (line ${line})`);
     return (state.heap[v.buffer].value as NumpyBufferValue).data[v.offset + idx]!;
   }
   if (obj.type === 'dict' || obj.type === 'defaultdict') {
-    const keyRepr = dictKeyRepr(index, state);
+    const keyRepr = dictKeyRepr(index, state, line);
     const entries = dictEntries(obj);
     const found = entries.find(([k]) => k === keyRepr);
     if (found) return found[1];
-    if (obj.type === 'dict') throw new Error(`KeyError: ${keyRepr} (line ${line})`);
-    // defaultdict auto-creates the factory value and stores it on read.
+    if (obj.type === 'dict') throw new PyKeyError(String(index));
     const factory = (obj.value as DefaultDictValue).factory;
     const created = applyFactory(factory, state, line);
     entries.push([keyRepr, created]);
@@ -2511,15 +3125,15 @@ function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: 
     const i = Number(index);
     const s = obj.value as string;
     const idx = i < 0 ? s.length + i : i;
-    if (idx < 0 || idx >= s.length) throw new Error(`IndexError: string index out of range (line ${line})`);
-    return allocString(s[idx], state);
+    if (idx < 0 || idx >= s.length) throw new PyIndexError(`string index out of range (line ${line})`);
+    return allocString(s[idx]!, state);
   }
-  throw new Error(`TypeError: '${obj.type}' object is not subscriptable (line ${line})`);
+  throw new PyTypeError(`'${obj.type}' object is not subscriptable (line ${line})`);
 }
 
 function sliceGet(objId: RtValue, start: RtValue, stop: RtValue, state: MemoryState, line: number): RtValue {
   const obj = state.heap[objId as string];
-  if (!obj) throw new Error(`TypeError: object is not sliceable (line ${line})`);
+  if (!obj) throw new PyTypeError(`object is not sliceable (line ${line})`);
   const s = start === null ? 0 : Number(start);
   const e = stop === null
     ? (obj.type === 'str' ? (obj.value as string).length : (obj.value as RtValue[]).length)
@@ -2537,28 +3151,80 @@ function sliceGet(objId: RtValue, start: RtValue, stop: RtValue, state: MemorySt
   if (obj.type === 'str') {
     return allocString((obj.value as string).slice(s, e), state);
   }
-  throw new Error(`TypeError: '${obj.type}' object is not sliceable (line ${line})`);
+  throw new PyTypeError(`'${obj.type}' object is not sliceable (line ${line})`);
 }
 
-function formatListLike(elts: RtValue[], state: MemoryState, open: string, close: string): string {
-  return open + elts.map((e) => displayValue(e, state)).join(', ') + close;
+function formatListLike(elts: RtValue[], state: MemoryState, open: string, close: string, seen = new Set<string>()): string {
+  return (
+    open +
+    elts
+      .map((e) =>
+        typeof e === 'string' && state.heap[e]
+          ? formatObject(state.heap[e], state, seen)
+          : displayValue(e, state)
+      )
+      .join(', ') +
+    close
+  );
 }
 
-function formatObject(obj: HeapObject, state: MemoryState): string {
-  if (obj.type === 'list') return formatListLike(obj.value as RtValue[], state, '[', ']');
-  if (obj.type === 'tuple') {
-    const value = obj.value as RtValue[];
-    const body = formatListLike(value, state, '(', ')');
-    return value.length === 1 ? `(${displayValue(value[0], state)},)` : body;
+function formatObject(obj: HeapObject, state: MemoryState, seen = new Set<string>()): string {
+  if (seen.has(obj.id)) {
+    if (obj.type === 'list') return '[...]';
+    if (obj.type === 'dict' || obj.type === 'defaultdict' || obj.type === 'set') return '{...}';
+    return '...';
   }
-  if (obj.type === 'set') {
-    return '{' + (obj.value as RtValue[]).map((e) => displayValue(e, state)).join(', ') + '}';
+  seen.add(obj.id);
+  try {
+    if (obj.type === 'list') return formatListLike(obj.value as RtValue[], state, '[', ']', seen);
+    if (obj.type === 'tuple') {
+      const value = obj.value as RtValue[];
+      const body = formatListLike(value, state, '(', ')', seen);
+      return value.length === 1 ? `(${displayValue(value[0]!, state)},)` : body;
+    }
+    if (obj.type === 'set') {
+      const elts = [...(obj.value as RtValue[])];
+      if (elts.length === 0) return 'set()';
+      elts.sort((a, b) => {
+        const na = typeof a === 'number' ? a : typeof a === 'bigint' ? Number(a) : NaN;
+        const nb = typeof b === 'number' ? b : typeof b === 'bigint' ? Number(b) : NaN;
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return 0;
+      });
+      return (
+        '{' +
+        elts
+          .map((e) =>
+            typeof e === 'string' && state.heap[e]
+              ? formatObject(state.heap[e], state, seen)
+              : displayValue(e, state)
+          )
+          .join(', ') +
+        '}'
+      );
+    }
+    if (obj.type === 'dict' || obj.type === 'defaultdict') {
+      const entries = dictEntries(obj);
+      return (
+        '{' +
+        entries
+          .map(([k, v]) => {
+            const keyDisp = k.startsWith('str:') ? formatStr(k.slice(4)) : k.startsWith('num:') ? k.slice(4) : k;
+            const valDisp = typeof v === 'string' && state.heap[v] ? formatObject(state.heap[v], state, seen) : displayValue(v, state);
+            return `${keyDisp}: ${valDisp}`;
+          })
+          .join(', ') +
+        '}'
+      );
+    }
+    if (obj.type === 'str') return formatStr(obj.value as string);
+    if (obj.type === 'float') return formatFloat(obj.value as number);
+    if (obj.type === 'type') return obj.repr;
+    if (obj.type === 'range') return rangeRepr(obj.value as RangeValue);
+    return String(obj.repr ?? obj.value);
+  } finally {
+    seen.delete(obj.id);
   }
-  if (obj.type === 'dict' || obj.type === 'defaultdict') {
-    return '{' + dictEntries(obj).map(([k, v]) => `${k}: ${displayValue(v, state)}`).join(', ') + '}';
-  }
-  if (obj.type === 'str') return formatStr(obj.value as string);
-  return String(obj.repr ?? obj.value);
 }
 
 /**
@@ -2568,9 +3234,17 @@ function formatObject(obj: HeapObject, state: MemoryState): string {
  * use their stored repr.
  */
 export function liveRepr(obj: HeapObject, state: MemoryState): string {
-  if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set' || obj.type === 'defaultdict') {
+  if (
+    obj.type === 'list' ||
+    obj.type === 'dict' ||
+    obj.type === 'tuple' ||
+    obj.type === 'set' ||
+    obj.type === 'defaultdict'
+  ) {
     return formatObject(obj, state);
   }
+  if (obj.type === 'range') return rangeRepr(obj.value as RangeValue);
+  if (obj.type === 'float') return formatFloat(obj.value as number);
   return obj.repr;
 }
 
@@ -2580,6 +3254,7 @@ export function liveRepr(obj: HeapObject, state: MemoryState): string {
 export function displayValue(v: RtValue, state: MemoryState): string {
   if (v === null) return 'None';
   if (typeof v === 'boolean') return v ? 'True' : 'False';
+  if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'number') return String(v);
   if (typeof v === 'string' && state.heap[v]) {
     return liveRepr(state.heap[v], state);
@@ -2594,10 +3269,14 @@ export function displayValue(v: RtValue, state: MemoryState): string {
 function printArg(v: RtValue, state: MemoryState): string {
   if (v === null) return 'None';
   if (typeof v === 'boolean') return v ? 'True' : 'False';
+  if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'number') return String(v);
   if (typeof v === 'string' && state.heap[v]) {
     const obj = state.heap[v];
-    return obj.type === 'str' ? (obj.value as string) : liveRepr(obj, state);
+    if (obj.type === 'str') return obj.value as string;
+    if (obj.type === 'float') return formatFloat(obj.value as number);
+    if (obj.type === 'range') return rangeRepr(obj.value as RangeValue);
+    return liveRepr(obj, state);
   }
   if (typeof v === 'string') return v;
   return String(v);
