@@ -17,7 +17,9 @@ Options for executing learner Python in the browser:
 
 ## Decision
 
-Implement a deliberate Python **subset** (`src/engine/*`) that models heap identity and frame locals explicitly. Not CPython. Document unsupported syntax (`if`, `for`, classes, imports) as hard errors in v0.
+Implement a deliberate Python **subset** (`src/engine/*`) that models heap identity and frame locals explicitly. Not CPython.
+
+*(Updated in ADR 003, 004, 006):* While classes, metaclasses, and arbitrary third-party C-extensions remain outside the pure client simulator, subsequent phases added full control flow (`if`/`elif`/`else`, `for`, `while`, `break`, `continue`), extended slicing (`[start:stop:step]`), compile-time function local scopes, closures, lambdas, arbitrary-precision integers, standard exceptions hierarchy, and standard library modules (`math`, `copy`, `collections`, `functools`, `numpy`, `pandas`, `matplotlib`, `threading`, `asyncio`), all verified via differential testing against real CPython (≥ 3.12).
 
 ## Consequences
 

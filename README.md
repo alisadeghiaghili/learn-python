@@ -40,10 +40,10 @@ Asyncio (coroutines, tasks, the event loop)
 Plotting & Capstone
 ```
 
-Every level has a brief, an optional hint, a **goal** (a predicate or a target
+Every level has a brief, graduated hints, a **goal** (a predicate or a target
 memory snapshot), a statement **par** for golf, and a worked solution. The test
 suite runs every solution against its goal, so the entire catalog is proven
-solvable within `par + 2` statements — not merely compilable.
+solvable within par statements ($used \le par$) — verified against real CPython in CI.
 
 ## What you see
 
@@ -55,7 +55,7 @@ Three boards sit side by side, plus a console REPL and a learning-guide panel:
 - **RAM** — the memory map: hex addresses, byte sizes, refcounts, and contiguous
   buffers. An ndarray view paints its offset/shape window as a strip aligned to the
   buffer's bytes, so a *view* and a *copy* look different at the byte level.
-- **Plot** — `scatter(xs, ys)` and `line(xs, ys, "title")` render the same data as
+- **Plot** — `plt.plot(xs, ys)`, `plt.scatter(xs, ys)`, and `plt.bar(xs, ys)` render data as
   SVG. The memory model and the chart read the identical objects, which is the
   point: a plot is just a list of `(x, y)` pairs.
 
@@ -77,7 +77,7 @@ npm run dev      # → http://127.0.0.1:5173
 ## Test
 
 ```bash
-npm test         # vitest run — 138 tests
+npm test         # vitest run — 292 passing tests including differential CPython tests
 npm run build    # type-check (tsc --noEmit) + production build to dist/
 ```
 
@@ -116,15 +116,11 @@ can show what a real interpreter hides.
 - **List methods** — `.append`, `.insert`, `.extend`, `.pop`, `.remove`, `.copy`,
   `.clear`
 - **Dict methods** — `.get`, `.update`, `.keys`, `.clear`
-- **Functions** — `def` / `async def`, calls, `return`, local frames, nested calls
-- **Builtins** — `print`, `len`, `type`, `id`, `int`, `str`, `bool`, `range`,
-  `iter`, `next`, `map`, `filter`, `reduce`, `list`, `dict`, `set`, `scatter`,
-  `line`
-- **Operators** — arithmetic, comparisons, `is`, `==`, `and` / `or` / `not`,
-  `in` / `not in`
-- **Iterators & functional** — `iter(x)` / `next(it)` (a stateful cursor you
-  advance by hand); `map(fn, it)` / `filter(pred, it)` are lazy iterator objects;
-  `reduce` is an eager fold
+- **Functions** — `def` / `async def`, calls, `return`, local frames, nested calls, closures, default arguments, compile-time local scoping
+- **Builtins** — `print`, `len`, `type`, `id`, `int`, `str`, `bool`, `range`, `iter`, `next`, `map`, `filter`, `reduce`, `list`, `dict`, `set`, `abs`, `min`, `max`, `sum`
+- **Operators** — arithmetic, comparisons, `is`, `==`, `and` / `or` / `not`, `in` / `not in`, augmented assignments (`+=`, `*=`)
+- **Exceptions** — `TypeError`, `ValueError`, `IndexError`, `KeyError`, `ZeroDivisionError`, `UnboundLocalError`, `RecursionError`, `ModuleNotFoundError`
+- **Iterators & functional** — `iter(x)` / `next(it)` (stateful cursor); `map(fn, it)` / `filter(pred, it)` (lazy iterators); `reduce` (eager fold)
 
 **Simulated libraries** — `import X` binds a module whose methods are taught for
 their *memory model*, not their full API:
@@ -134,16 +130,14 @@ their *memory model*, not their full API:
 | `import copy as cp` | `cp.copy` (shallow) vs `cp.deepcopy` |
 | `import collections as c` | `c.defaultdict` |
 | `import functools as f` | `f.reduce` |
-| `import numpy as np` | `np.array` → an ndarray *window* over a separate **buffer** box; `.copy()` mints a new buffer; a slice is a *view* sharing the buffer; `a + 1` vectorizes into a new buffer; `.sum()` |
+| `import math` | `math.sqrt`, `math.pi` |
+| `import numpy as np` | `np.array` → an ndarray *window* over a separate **buffer** box; `.copy()` mints a new buffer; a slice is a *view* sharing the buffer; `a + 1` vectorizes into a new buffer; `.sum()`, broadcasting |
 | `import pandas as pd` | `pd.DataFrame` / `pd.Series` / `pd.read_csv`; `df.iloc[a:b]` is a true *view* (a write through it lands in the frame); `.copy()` is a new buffer; `df["col"]` → Series |
-| `import asyncio as a` | `async def`, `a.create_task`, `a.run` — a tick-based event loop that round-robins tasks to their next `await`, so two tasks visibly interleave |
-| `import threading as t` | `t.Thread` / `t.Lock`, `.start()` / `.join()`, `.acquire()` / `.release()` — threads share the heap and interleave on it; a held lock blocks the caller (the data race, made visible) |
+| `import matplotlib.pyplot as plt` | `plt.plot`, `plt.scatter`, `plt.bar`, `plt.title`, `plt.xlabel`, `plt.ylabel`, `plt.show()` |
+| `import asyncio as a` | `async def`, `a.create_task`, `await a.sleep(0)`, `a.run` — a tick-based event loop scheduling ready tasks |
+| `import threading as t` | `t.Thread(target=f, args=(x,))` / `t.Lock`, `with lock:`, `.start()` / `.join()` — threads share the heap and interleave |
 
-**Not in this version:** classes, real module imports, exceptions (beyond clean
-parse/runtime errors), comprehensions, real I/O, and full CPython semantics. The
-curriculum roadmap (re, datetime, pytz, requests, SQLAlchemy, pyodbc,
-multiprocessing, matplotlib, plotly) extends the same canvas — see
-[docs/CURRICULUM.md](docs/CURRICULUM.md).
+**Two execution lanes:** The hand-written TypeScript simulator provides deterministic step-by-step visual control for memory model, aliasing, and buffer inspection. Material requiring full CPython libraries (`re`, `pydantic`, `pytest`, `SQLAlchemy`, `FastAPI`) runs on the companion Pyodide execution lane (see ADR 006 / Phase 10).
 
 ## Architecture
 

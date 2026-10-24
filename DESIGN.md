@@ -16,42 +16,40 @@ learn-python teaches that model with the same loop:
 
 No backend. Simulated Python subset (not CPython, not Pyodide) so every state transition is fully controlled and visualizable — same reason LGB fakes git in JS.
 
-## Scope (v0)
+## Scope
 
-Supported subset (deliberately small, pedagogically sharp):
+Supported Python subset (pedagogically sharp, verified against real CPython in CI):
 
-- Literals: `int`, `float`, `str`, `bool`, `None`
-- Names, assignment, rebinding, augmented assign
-- `list`, `dict`, `tuple`, `set`, indexing, slicing, `.append` / `.pop` / `.update`
-- Function `def` / call / `return`, local frames, nested calls
-- `print`, `type`, `id`, `len`, `is`, `==`, arithmetic, comparisons
-- `import copy as cp` (simulated module) → `cp.copy` (shallow) / `cp.deepcopy`
-- `import collections as c` → `c.defaultdict(factory)` → dict box with a default-factory
-- `import functools as f` → `f.reduce(fn, it)` → eager fold
-- `iter(x)` / `next(it)` → stateful iterator object (source reference + cursor)
-- `map(fn, it)` / `filter(pred, it)` → lazy iterator object (source + function reference)
-- Plotting: `scatter(xs, ys, "title")` / `line(xs, ys, "title")` → SVG board
+- Literals: arbitrary-precision `int` (BigInt), distinct `float`, `str`, `bool`, `None`
+- Names: assignment, rebinding, augmented assignment with in-place mutation semantics (`+=`, `*=`, etc.)
+- Containers: `list`, `dict`, `tuple`, `set`, indexing, extended slicing (`[start:stop:step]`), methods (`.append`, `.pop`, `.update`, `.clear`, etc.)
+- Control flow: `if`/`elif`/`else`, `for` (with `break`, `continue`, `else`), `while` (with `break`, `continue`, `else`), lazy `range` sequence
+- Function definitions: `def`, closures, lexical scope with compile-time local detection, nested calls, default arguments, lambda expressions
+- Exceptions hierarchy: `TypeError`, `ValueError`, `IndexError`, `KeyError`, `ZeroDivisionError`, `UnboundLocalError`, `RecursionError`, `ModuleNotFoundError`
+- Standard modules & libraries:
+  - `math`: `sqrt`, `pi`
+  - `copy`: `copy`, `deepcopy`
+  - `collections`: `defaultdict`
+  - `functools`: `reduce`
+  - `numpy`: 1D/2D `ndarray`, vector operations, broadcasting, memory buffer views and `.base`
+  - `pandas`: `Series`, `DataFrame`, row-major buffers, `.iloc` views vs copies
+  - `matplotlib.pyplot`: `plot`, `scatter`, `bar`, `title`, `xlabel`, `ylabel`, `show`
+  - `threading`: `Thread(target=f, args=(x,))`, `Lock`, `with lock:`
+  - `asyncio`: coroutines, `create_task`, `await asyncio.sleep(0)`, `gather`, `run`
 - Meta: `help`, `levels`, `level`, `goal`, `hint`, `solution`, `undo`, `reset`, `golf`, `script`
 
-Out of scope v0: classes/OOP, real imports (only the simulated `copy`, `collections`, `functools`
-modules), control flow
-(`if`/`for`/`while`), exceptions (except parse/runtime errors shown cleanly), comprehensions beyond
-simple cases, I/O, async, `range`/`sorted`/`min`/`max`/`abs`.
-
-A planned curriculum (numpy, pandas, re, datetime, …) extends the same engine — each library is a
-simulated module whose data structures are first-class heap objects on this canvas. See
-`docs/ENGINE-EXTENSION.md` and `docs/adr/002-library-modules.md`.
+Out of pure simulator scope: arbitrary C-extensions and metaclasses. Material requiring real CPython execution (regex `re`, `pytest`, `pydantic`, `SQLAlchemy`, `FastAPI`) runs in the companion Pyodide execution lane (see ADR 006 / Phase 10).
 
 ## Architecture
 
 ```
 src/engine/    simulated Python runtime (tokenizer, parser, evaluator, memory,
-               session) + goal checks (checks.ts) — the TreeCompare analogue
-src/levels/    9-series / 35-level catalog + per-level goals, par, solutions
-src/ui/        app shell, memory canvas, plot board, REPL, dialog, script editor
-src/style.css  design tokens + layout
-index.html     app shell entry
-tests/         engine + compare + level-solution unit tests (vitest)
+               session) + modular libraries (numpy, pandas, asyncio, threading, matplotlib)
+               + goal checks (checks.ts)
+src/levels/    16-series / 78-level catalog + per-level goals, par, solutions
+src/ui/        app shell, memory canvas, plot board, RAM board, REPL, dialog, script editor
+src/i18n/      trilingual translations (English, German, Farsi)
+tests/         engine unit tests, visualizer tests, and CPython differential harness
 ```
 
 Mirrors LGB's separation: `engine` / `visuals` / `levels` / `command line`.
