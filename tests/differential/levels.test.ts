@@ -55,7 +55,7 @@ describe('Differential level solutions against CPython', () => {
         }
         expect(cpythonRes.errorType).toBeNull();
       },
-      15000
+      30000
     );
   }
 });

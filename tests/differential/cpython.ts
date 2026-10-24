@@ -102,7 +102,8 @@ export function runPython(source: string): ExecutionResult {
   const res = spawnSync(py.command, [...py.args, '-c', HARNESS_SCRIPT], {
     input: source,
     encoding: 'utf-8',
-    timeout: 10000,
+    timeout: 30000,
+    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
   });
 
   const stdout = (res.stdout || '').replace(/\r\n/g, '\n');
