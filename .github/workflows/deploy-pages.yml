@@ -15,7 +15,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python dev dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test
+        run: npm test
+      - name: Type check
+        run: npx tsc --noEmit
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,8 +51,6 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Test
-        run: npm test
       - name: Build
         run: npm run build
       - name: Upload Pages artifact
@@ -37,7 +59,7 @@ jobs:
           path: dist
 
   deploy:
-    needs: build
+    needs: [build, test]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
