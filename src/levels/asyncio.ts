@@ -152,7 +152,7 @@ Where it pays off and where this model stops.
         name: 'Call an async def',
         brief: 'Define `async def greet():` and call `c = greet()`. Calling it does NOT run the body — it returns a **coroutine**, a saved place in the function.',
         hint: 'c = greet()',
-        start: 'async def greet():\n    print("hi")\n    await None',
+        start: 'import asyncio as a\nasync def greet():\n    print("hi")\n    await a.sleep(0)',
         par: 1,
         difficulty: 2,
         goal: {
@@ -162,7 +162,7 @@ Where it pays off and where this model stops.
         solution: 'c = greet()',
         lesson: `An **async def** is a coroutine function. Calling it does **not** run the body — it returns a **coroutine** object, a saved place (at statement 0) in that function. Nothing has run: no output, no progress. The body runs later, when something drives the coroutine on ticks.`,
         learning: ['Calling an async def returns a coroutine, not a result', 'The body has not run yet — the coroutine is a saved place'],
-        fieldNotes: ['A coroutine is an object you can pass around (as an argument to create_task)', 'The `await None` in the body is a suspension point the loop will hit later'],
+        fieldNotes: ['A coroutine is an object you can pass around (as an argument to create_task)', '`await a.sleep(0)` is a suspension point the loop will hit later'],
       },
       {
         id: 'as-create-task',
@@ -170,7 +170,7 @@ Where it pays off and where this model stops.
         name: 'Wrap a coroutine in a task',
         brief: 'Build `c = greet()` (a coroutine) and `t = a.create_task(c)`. A **task** is a *named handle* to a coroutine — the unit the event loop schedules.',
         hint: 't = a.create_task(c)',
-        start: 'import asyncio as a\nasync def greet():\n    print("hi")\n    await None\nc = greet()',
+        start: 'import asyncio as a\nasync def greet():\n    print("hi")\n    await a.sleep(0)\nc = greet()',
         par: 1,
         difficulty: 3,
         goal: {
@@ -188,7 +188,7 @@ Where it pays off and where this model stops.
         name: 'Run the loop (one task)',
         brief: 'Create a task `t = a.create_task(greet())` and start the loop with `a.run(t)`. The loop steps the task to completion — its `print` appears.',
         hint: 'a.run(t)',
-        start: 'import asyncio as a\nasync def greet():\n    print("hi")\n    await None\nt = a.create_task(greet())',
+        start: 'import asyncio as a\nasync def greet():\n    print("hi")\n    await a.sleep(0)\nt = a.create_task(greet())',
         par: 1,
         difficulty: 3,
         goal: {
@@ -206,7 +206,7 @@ Where it pays off and where this model stops.
         name: 'await yields the tick',
         brief: 'Two tasks, `a.run(t1, t2)`. Task 1 prints, then `await`s — it **suspends**, and the loop hands the tick to task 2 before coming back. Watch the output interleave.',
         hint: 'a.run(t1, t2)',
-        start: 'import asyncio as a\nasync def first():\n    print("1a")\n    await None\n    print("1b")\nasync def second():\n    print("2")\nt1 = a.create_task(first())\nt2 = a.create_task(second())',
+        start: 'import asyncio as a\nasync def first():\n    print("1a")\n    await a.sleep(0)\n    print("1b")\nasync def second():\n    print("2")\nt1 = a.create_task(first())\nt2 = a.create_task(second())',
         par: 1,
         difficulty: 4,
         goal: {
@@ -221,7 +221,7 @@ Where it pays off and where this model stops.
         solution: 'a.run(t1, t2)',
         lesson: `This is the whole lesson made visible. \`first()\` prints "1a", hits \`await\`, and **suspends** — the loop doesn't wait, it moves to the *next* ready task. \`second()\` prints "2" and returns. Only then does the loop come back to \`first()\`, which prints "1b" and finishes. The output \`1a, 2, 1b\` is the proof: **\`await\` never blocks — it yields the tick so someone else runs.**`,
         learning: ['await suspends the current task and lets the loop run the next ready task', 'Two tasks interleave (A, B, A) instead of running one after the other'],
-        fieldNotes: ['The output order — not the code order — is what concurrency looks like', '`await None` is the minimal yield; real code awaits sleep / I/O / futures'],
+        fieldNotes: ['The output order — not the code order — is what concurrency looks like', '`await a.sleep(0)` is the minimal yield; real code awaits sleep / I/O / futures'],
       },
       {
         id: 'as-produce-consume',
@@ -229,7 +229,7 @@ Where it pays off and where this model stops.
         name: 'Capstone: producer & consumer',
         brief: 'Two cooperating tasks over a **shared list**: `producer` appends, `consumer` reads, each yielding on `await`. Run them both — they interleave and the consumer sees what the producer wrote.',
         hint: 'a.run(tp, tc)',
-        start: 'import asyncio as a\nitems = []\nasync def producer():\n    items.append("p1")\n    await None\n    items.append("p2")\nasync def consumer():\n    await None\n    print(items[0])\ntp = a.create_task(producer())\ntc = a.create_task(consumer())',
+        start: 'import asyncio as a\nitems = []\nasync def producer():\n    items.append("p1")\n    await a.sleep(0)\n    items.append("p2")\nasync def consumer():\n    await a.sleep(0)\n    print(items[0])\ntp = a.create_task(producer())\ntc = a.create_task(consumer())',
         par: 1,
         difficulty: 5,
         goal: {
