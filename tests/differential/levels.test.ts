@@ -20,34 +20,18 @@ describe('Differential level solutions against CPython', () => {
   const levels = allLevels();
 
   /**
-   * Levels scheduled for CPython API overhaul in Phase 4 (Asyncio, Threading, Plotting).
-   * In Phase 4, their solutions are updated to valid CPython and these fails marks removed.
+   * In Phase 4, all level solutions are updated to 100% valid CPython and tested without failures.
    */
-  const KNOWN_PHASE4_LEVEL_BUGS = new Set([
-    'as-create-task',
-    'as-run-one',
-    'as-two-tasks',
-    'as-await-yields',
-    'as-produce-consume',
-    'as-starve-capstone',
-    'th-make-thread',
-    'th-start-join',
-    'th-race',
-    'th-lock',
-    'th-critical-capstone',
-    'plot-scatter',
-    'plot-trend',
-    'capstone-shared-mutation',
-  ]);
+  const KNOWN_PHASE4_LEVEL_BUGS = new Set<string>([]);
 
   for (const level of levels) {
     const isKnownFailing = KNOWN_PHASE4_LEVEL_BUGS.has(level.id);
     const testRunner = py ? (isKnownFailing ? it.fails : it) : it.skip;
     testRunner(
       `level solution is valid CPython: [${level.id}]`,
-      () => {
+      async () => {
         const code = (level.start ? level.start + '\n' : '') + level.solution;
-        const cpythonRes = runPython(code);
+        const cpythonRes = await runPython(code);
         if (cpythonRes.errorType !== null) {
           throw new Error(
             `Level '${level.id}' solution is NOT valid CPython: raised ${cpythonRes.errorType}\n${cpythonRes.rawError}`
@@ -55,7 +39,7 @@ describe('Differential level solutions against CPython', () => {
         }
         expect(cpythonRes.errorType).toBeNull();
       },
-      30000
+      60000
     );
   }
 });

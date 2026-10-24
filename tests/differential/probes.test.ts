@@ -24,8 +24,8 @@ describe('Differential probes: Phase 2 engine semantics against CPython', () => 
     const testFn = py ? (opts.fails ? it.fails : it) : it.skip;
     testFn(
       name,
-      () => {
-        const expected = runPython(code);
+      async () => {
+        const expected = await runPython(code);
         const actual = runSimulator(code);
 
         if (expected.errorType !== null) {
