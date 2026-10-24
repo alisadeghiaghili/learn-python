@@ -20,7 +20,7 @@ export const series: Sequence[] = [
         par: 4,
         difficulty: 3,
         goal: { type: 'plot', kind: 'scatter' },
-        solution: 'import matplotlib.pyplot as plt\nx = [1, 2, 3]\ny = [1, 4, 9]\nplt.scatter(x, y)\nplt.show()',
+        solution: 'x = [1, 2, 3]\ny = [1, 4, 9]\nplt.scatter(x, y)\nplt.show()',
         lesson: `Now connect the memory model to a chart. \`plt.scatter(x, y)\` pairs up the two lists point-by-point and pushes a **plot spec** onto \`state.plots\`.
 
 Watch the board: a small dot appears on the Plot tab badge, and clicking it shows the drawn points. The plot is just data — a list of \`(x, y)\` pairs — rendered as SVG.`,
@@ -37,7 +37,7 @@ Watch the board: a small dot appears on the Plot tab badge, and clicking it show
         par: 6,
         difficulty: 4,
         goal: { type: 'plot', kind: 'line' },
-        solution: 'import matplotlib.pyplot as plt\ndef sq(n):\n    return n * n\nxs = [1, 2, 3]\nys = [sq(1), sq(2), sq(3)]\nplt.plot(xs, ys)\nplt.show()',
+        solution: 'def sq(n):\n    return n * n\nxs = [1, 2, 3]\nys = [sq(1), sq(2), sq(3)]\nplt.plot(xs, ys)\nplt.show()',
         lesson: `Here the series is **computed**, not typed. \`sq\` produces each \`y\`, the \`ys\` list is built from those results, and \`plt.plot(xs, ys)\` connects the points in order.
 
 This is the shape of real plotting: transform some data, gather it into aligned series, then draw. The function call frames you saw in S5 are doing work that feeds the chart.`,
@@ -61,7 +61,7 @@ This is the shape of real plotting: transform some data, gather it into aligned 
             preds.hasPlot('scatter'),
           ],
         },
-        solution: 'import matplotlib.pyplot as plt\ndata = [1, 2, 3]\nmirror = data\ndef bump(d):\n    d.append(4)\nbump(mirror)\nplt.scatter(data, data)\nplt.show()',
+        solution: 'data = [1, 2, 3]\nmirror = data\ndef bump(d):\n    d.append(4)\nbump(mirror)\nplt.scatter(data, data)\nplt.show()',
         lesson: `This level strings together everything you have learned. \`data\` and \`mirror\` **alias** one list. \`bump\` **mutates** it in place through \`mirror\`, so \`data\` sees the growth too — then we **plot** the result.
 
 Three core ideas in statements: aliasing (S2), in-place mutation that escapes a function (S4/S5), and turning data into a chart (S6). If you can see all three on the canvas at once, you understand the model.`,

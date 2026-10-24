@@ -99,7 +99,8 @@ Where this model pays off and where it breaks.
   flat 1-D window to stay honest about the buffer, and says so in the lessons.
 - **\`base\` / \`.copy()\` contract**: in production, \`arr.base\` is the canonical
   "does this view own its data" check; \`copy(arr)\` and \`arr.copy()\` are the
-  escape hatch. A view outliving its buffer is the classic memory-safety trap.
+  escape hatch. In Python, reference counts keep the buffer alive as long as a
+  view points to it, but modifying through a view mutates the base array unexpectedly.
 - **Performance**: prefer in-place ops and views when you don't need the
   independence, and \`np.ascontiguousarray\` before a call that wants
   contiguity. The identity picture — shared vs owned buffer — is the whole

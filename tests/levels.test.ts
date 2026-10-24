@@ -75,7 +75,8 @@ test('every level has a solution that meets the goal within par', () => {
     const result = checkGoal(level.goal, snapshot(state), state);
     expect(result.ok, `${level.id}: ${result.message}`).toBe(true);
     const used = countStatements(level.solution);
-    expect(used, `${level.id} golf par too tight (used ${used}, par ${level.par})`).toBeLessThanOrEqual(level.par + 2);
+    expect(used, `${level.id} golf par too tight (used ${used}, par ${level.par})`).toBeLessThanOrEqual(level.par);
+    expect(level.par - used, `${level.id} par too loose (used ${used}, par ${level.par})`).toBeLessThanOrEqual(1);
   }
 });
 

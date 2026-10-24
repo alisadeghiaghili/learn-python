@@ -93,9 +93,10 @@ The mechanics, precisely.
 
 Where it pays off and where it breaks.
 
-- **Copy-on-write**: modern pandas moves toward copy-on-write, where a view
-  only *looks* shared until you write, at which point it copies. This
-  visualizer teaches the classic eager view so the buffer-sharing is explicit.
+- **Copy-on-write**: in pandas 3.0+, Copy-on-Write (CoW) is the default and only mode,
+  meaning writing through a slice triggers a defensive copy to prevent silent mutation
+  of the source DataFrame. This visualizer models the underlying shared-buffer layout
+  so you can see why defensive copies exist.
 - **Loc vs iloc**: \`loc\` is label-based, \`iloc\` is position-based — both are
   views; neither copies. Writing through a view mutates the shared buffer (the
   classic foot-gun), while assigning a *new* column rebinds.

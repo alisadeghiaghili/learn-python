@@ -82,7 +82,7 @@ Each one asks a yes/no question and answers \`True\` or \`False\`. \`10 > 7\` is
         par: 2,
         difficulty: 2,
         goal: { type: 'stdout', lines: ['good job'] },
-        solution: 'score = 85\nif score >= 60:\n    print("good job")',
+        solution: 'if score >= 60:\n    print("good job")',
         lesson: `Now the program can *choose*. The \`if\` line ends with a colon, and the **indented** lines below it only run if the test is true.
 
 \`if score >= 60:\` asks “is the score 60 or more?” Here the score is 85, so the indented \`print\` runs. If the score were 40, the same code would print nothing.
@@ -101,7 +101,7 @@ The indentation (the leading spaces) is what tells Python which lines belong to 
         par: 4,
         difficulty: 2,
         goal: { type: 'stdout', lines: ['keep going'] },
-        solution: 'score = 40\nif score >= 60:\n    print("good job")\nelse:\n    print("keep going")',
+        solution: 'if score >= 60:\n    print("good job")\nelse:\n    print("keep going")',
         lesson: `Sometimes you want to handle *both* outcomes. Add \`else:\` after the \`if\` block.
 
 The rule is clean: exactly one of the two blocks runs. If the test is true, run the \`if\` block; if it’s false, run the \`else\` block. Never both, never neither.
@@ -117,11 +117,10 @@ Here the score is 40, so the test fails and the \`else\` block prints \`keep goi
         brief: 'Grade a `score` of 72: print `A` if it is 90 or higher, `B` if it is 70 or higher, otherwise `C`.',
         hint: 'Use if / elif / else, each with its own block.',
         start: 'score = 72',
-        par: 9,
+        par: 6,
         difficulty: 3,
         goal: { type: 'stdout', lines: ['B'] },
         solution:
-          'score = 72\n' +
           'if score >= 90:\n    print("A")\n' +
           'elif score >= 70:\n    print("B")\n' +
           'else:\n    print("C")',
