@@ -88,6 +88,30 @@ export class PySyntaxError extends PyException {
   }
 }
 
+export class PyRuntimeError extends PyException {
+  constructor(message = '') {
+    super('RuntimeError', message);
+  }
+}
+
+/** Internal flow control signal to pause/yield simulator execution in coroutines or thread context switches. */
+export class PySuspend extends Error {
+  constructor() {
+    super('suspend');
+    this.name = 'PySuspend';
+  }
+}
+
+/** Internal flow control signal for Python return statements. */
+export class PyReturn extends Error {
+  readonly value: unknown;
+  constructor(value: unknown) {
+    super('return');
+    this.name = 'PyReturn';
+    this.value = value;
+  }
+}
+
 /**
  * Check if a thrown error matches an expected exception class name or tuple.
  */

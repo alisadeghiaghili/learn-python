@@ -6,7 +6,7 @@
  */
 
 import { tokenize } from './tokenizer';
-import type { AstNode, RtValue, Token, TokenType } from './types';
+import type { AstNode, KeywordNode, RtValue, Token, TokenType } from './types';
 
 class Parser {
   private tokens: Token[];
@@ -63,13 +63,22 @@ class Parser {
     if (!tok) throw new Error('SyntaxError: unexpected end of input');
     if (tok.type === 'KEYWORD' && tok.value === 'async') {
       const next = this.tokens[this.pos + 1];
-      if (!next || next.type !== 'KEYWORD' || next.value !== 'def') {
-        throw new Error('SyntaxError: only "async def" is supported (line ' + tok.line + ')');
+      if (next && next.type === 'KEYWORD' && next.value === 'def') {
+        return this.parseCoroutineDef();
       }
-      return this.parseCoroutineDef();
+      if (next && next.type === 'KEYWORD' && next.value === 'with') {
+        this.next(); // eat 'async'
+        const withNode = this.parseWith();
+        (withNode as any).isAsync = true;
+        return withNode;
+      }
+      throw new Error('SyntaxError: only "async def" and "async with" are supported (line ' + tok.line + ')');
     }
     if (tok.type === 'KEYWORD' && tok.value === 'def') {
       return this.parseFunctionDef();
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'with') {
+      return this.parseWith();
     }
     if (tok.type === 'KEYWORD' && tok.value === 'return') {
       this.next();
@@ -366,6 +375,25 @@ class Parser {
     return { kind: 'Try', body, handlers, elseBody, finallyBody, line: tok.line };
   }
 
+  /** `with <expr> [as <var>]: ...` */
+  private parseWith(): AstNode {
+    const tok = this.expect('KEYWORD', 'with');
+    const items: Array<{ contextExpr: AstNode; optionalVars: AstNode | null }> = [];
+    do {
+      const contextExpr = this.parseExpr();
+      let optionalVars: AstNode | null = null;
+      if (this.peek()?.type === 'KEYWORD' && this.peek()?.value === 'as') {
+        this.next();
+        optionalVars = this.parseExpr();
+      }
+      items.push({ contextExpr, optionalVars });
+    } while (this.eatOp(','));
+    this.eatOp(':');
+    this.eatNewline();
+    const body = this.parseSuite();
+    return { kind: 'With', items, body, line: tok.line };
+  }
+
   /** `import x`, `import x.y`, or `import x as z`. (from-imports are v1.) */
   private parseImport(): AstNode {
     const tok = this.expect('KEYWORD', 'import');
@@ -543,17 +571,27 @@ class Parser {
         if (!(this.peek()?.type === 'OP' && this.peek().value === ']')) {
           if (this.peek()?.type === 'OP' && this.peek().value === ':') {
             this.next();
-            const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
+            const stop = this.peek()?.type === 'OP' && (this.peek().value === ']' || this.peek().value === ':') ? null : this.parseExpr();
+            let step: AstNode | null = null;
+            if (this.peek()?.type === 'OP' && this.peek().value === ':') {
+              this.next();
+              step = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
+            }
             this.expect('OP', ']');
-            node = { kind: 'Slice', object: attrBase, start: null, stop, line: tok.line, attr };
+            node = { kind: 'Slice', object: attrBase, start: null, stop, step, line: tok.line, attr };
             continue;
           }
           const start = this.parseExpr();
           if (this.peek()?.type === 'OP' && this.peek().value === ':') {
             this.next();
-            const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
+            const stop = this.peek()?.type === 'OP' && (this.peek().value === ']' || this.peek().value === ':') ? null : this.parseExpr();
+            let step: AstNode | null = null;
+            if (this.peek()?.type === 'OP' && this.peek().value === ':') {
+              this.next();
+              step = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
+            }
             this.expect('OP', ']');
-            node = { kind: 'Slice', object: attrBase, start, stop, line: tok.line, attr };
+            node = { kind: 'Slice', object: attrBase, start, stop, step, line: tok.line, attr };
             continue;
           }
           index = start;
@@ -565,20 +603,37 @@ class Parser {
       if (tok.type === 'OP' && tok.value === '(') {
         this.next();
         const args: AstNode[] = [];
+        const keywords: KeywordNode[] = [];
         if (!(this.peek()?.type === 'OP' && this.peek().value === ')')) {
-          args.push(this.parseExpr());
+          this.parseCallArg(args, keywords);
           while (this.eatOp(',')) {
             if (this.peek()?.type === 'OP' && this.peek().value === ')') break;
-            args.push(this.parseExpr());
+            this.parseCallArg(args, keywords);
           }
         }
         this.expect('OP', ')');
-        node = { kind: 'Call', func: node, args, line: tok.line };
+        node = { kind: 'Call', func: node, args, keywords: keywords.length > 0 ? keywords : undefined, line: tok.line };
         continue;
       }
       break;
     }
     return node;
+  }
+
+  private parseCallArg(args: AstNode[], keywords: KeywordNode[]): void {
+    const tok = this.peek();
+    const nextTok = this.tokens[this.pos + 1];
+    if (tok && tok.type === 'NAME' && nextTok && nextTok.type === 'OP' && nextTok.value === '=') {
+      this.next(); // name
+      this.next(); // '='
+      const val = this.parseExpr();
+      keywords.push({ kind: 'Keyword', arg: tok.value, value: val, line: tok.line });
+    } else {
+      if (keywords.length > 0) {
+        throw new Error(`SyntaxError: positional argument follows keyword argument (line ${tok?.line || 1})`);
+      }
+      args.push(this.parseExpr());
+    }
   }
 
   private parseAtom(): AstNode {

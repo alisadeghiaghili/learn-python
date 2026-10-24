@@ -8,7 +8,7 @@ const KEYWORDS = new Set([
   'def', 'return', 'if', 'elif', 'else', 'for', 'in', 'while',
   'and', 'or', 'not', 'is', 'None', 'True', 'False', 'pass',
   'break', 'continue', 'import', 'from', 'as', 'class', 'lambda',
-  'async', 'await', 'global', 'nonlocal', 'try', 'except', 'finally', 'raise',
+  'async', 'await', 'global', 'nonlocal', 'try', 'except', 'finally', 'raise', 'with',
 ]);
 
 const THREE_CHAR_OPS = ['//=', '**=', '...'];

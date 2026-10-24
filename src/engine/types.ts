@@ -57,8 +57,10 @@ export interface Frame {
 
 /** A simple static plot spec (rendered on the Plot board tab). */
 export interface PlotSpec {
-  kind: 'scatter' | 'line';
-  title: string;
+  kind: 'scatter' | 'line' | 'bar';
+  title?: string;
+  xlabel?: string;
+  ylabel?: string;
   points: Array<[number, number]>;
 }
 
@@ -173,6 +175,7 @@ export interface SliceNode extends BaseNode {
   object: AstNode;
   start: AstNode | null;
   stop: AstNode | null;
+  step?: AstNode | null;
   /** The attribute selector when the target is `obj.attr[a:b]` (e.g. `df.loc`). */
   attr?: string;
 }
@@ -181,10 +184,16 @@ export interface AttributeNode extends BaseNode {
   object: AstNode;
   attr: string;
 }
+export interface KeywordNode extends BaseNode {
+  kind: 'Keyword';
+  arg: string;
+  value: AstNode;
+}
 export interface CallNode extends BaseNode {
   kind: 'Call';
   func: AstNode;
   args: AstNode[];
+  keywords?: KeywordNode[];
 }
 
 /* —— Statements —— */
@@ -305,6 +314,17 @@ export interface BreakNode extends BaseNode {
 export interface ContinueNode extends BaseNode {
   kind: 'Continue';
 }
+export interface WithItem {
+  contextExpr: AstNode;
+  optionalVars?: AstNode | null;
+}
+/** `with <expr> [as <var>]:` */
+export interface WithNode extends BaseNode {
+  kind: 'With';
+  items: WithItem[];
+  body: AstNode[];
+  isAsync?: boolean;
+}
 
 export type AstNode =
   | LiteralNode
@@ -321,6 +341,7 @@ export type AstNode =
   | SliceNode
   | AttributeNode
   | CallNode
+  | KeywordNode
   | AssignNode
   | AugAssignNode
   | ExprStatementNode
@@ -340,7 +361,8 @@ export type AstNode =
   | ForNode
   | WhileNode
   | BreakNode
-  | ContinueNode;
+  | ContinueNode
+  | WithNode;
 
 /* —— Goals / checks —— */
 
