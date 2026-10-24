@@ -11,18 +11,18 @@ export const deG2: LevelGroup = {
   levels: {
     'first-name': {
       name: 'Der erste Name',
-      brief: 'Bindet den Namen `x` an die Ganzzahl 3. Namen leben im Stack-Frame; kleine Ganzzahlen leben als Werte, nicht als Heap-Boxen.',
+      brief: 'Bindet den Namen `x` an die Ganzzahl 3. Ein Name ist ein Etikett, das auf ein Objekt zeigt; das Canvas zeichnet kleine Zahlen direkt beim Namen, um das Bild übersichtlich zu halten.',
       learning: [
         'Ein Name lebt im Stack-Frame, nicht im Heap',
-        'Kleine ints sind Werte, direkt im Frame abgelegt',
+        'Jeder Name zeigt auf ein Objekt; das Canvas zeichnet kleine ints inline, damit das Bild lesbar bleibt',
       ],
       fieldNotes: [
         'Namensbindung ist O(1) — ein einziger Tabellenzugriff',
         'Python-Namen sind Groß-/Kleinschreibung-empfindlich: `X` und `x` sind unterschiedlich',
       ],
-      lesson: `Ein *Name* ist ein Etikett, das auf einen Wert zeigt. \`x = 3\` schreibt den Namen \`x\` in den aktuellen Stack-Frame und lässt ihn auf die Ganzzahl 3 zeigen.
+      lesson: `Ein *Name* ist ein Etikett, das auf ein Objekt zeigt. \`x = 3\` schreibt den Namen \`x\` in den aktuellen Stack-Frame und lässt ihn auf die Ganzzahl 3 zeigen.
 
-Kleine Ganzzahlen wie 3 werden **direkt im Frame** abgelegt — im Heap siehst du dafür keine Box. Der Name ist kein kleines Kästchen, das die Zahl enthält, sondern ein Etikett auf der Zahl selbst.`,
+In echtem Python ist auch 3 ein Objekt (probiere \`id(x)\`). Dieses Canvas zeichnet kleine unveränderliche Werte wie Ganzzahlen **direkt im Frame**, anstatt als Heap-Boxen. Das ist eine vereinfachte Darstellung, keine Behauptung, dass Zahlen keine Objekte seien. Der Name ist kein kleines Kästchen, das die Zahl enthält, sondern ein Etikett auf der Zahl selbst.`,
     },
     rebind: {
       name: 'Neu binden',
@@ -55,34 +55,34 @@ Deshalb ist „Variablen“ ein etwas irreführendes Wort: Es ist der Name, der 
 Schau auf das Canvas: Der Frame zeigt \`xs\` mit einem kleinen Pfeil auf eine teal Box im Heap. Die Box enthält die Liste; der Name zeigt nur auf sie. Diese Trennung ist der Kern des Speichermodells.`,
     },
     'values-vs-refs': {
-      name: 'Werte vs. Referenzen',
-      brief: 'Halte in einem Frame beide gleichzeitig: `x` ist die int 3, `xs` ist eine Liste. Sieh den Kontrast auf dem Canvas.',
+      name: 'Unveränderlich vs. veränderbar',
+      brief: 'Halte in einem Frame sowohl ein unveränderliches int als auch eine veränderbare Liste: `x` ist 3, `xs` ist `[1, 2]`. Vergleiche, wie das Canvas sie darstellt.',
       learning: [
-        'Werte werden im Frame abgelegt; Referenzen zeigen auf den Heap',
-        'Einen Wert zu kopieren und eine Referenz zu kopieren sind verschiedene Operationen',
+        'Jeder Name hält eine Referenz; der Unterschied ist, ob sich das Objekt in-place ändern kann',
+        'Das Canvas zeichnet unveränderliche ints inline und veränderbare Listen als Heap-Boxen',
       ],
       fieldNotes: [
-        'NumPy/`dataclasses` stützen sich auf diese Wert-vs.-Referenz-Trennung',
-        'Strings in CPython sind unveränderliche, wertähnliche Objekte',
+        'Veränderbar vs. unveränderlich entscheidet darüber, ob das Teilen eines Objekts riskant ist',
+        'Strings sind wie ints unveränderliche Objekte',
       ],
-      lesson: `Leg beide Arten von Bindung in einen Frame. \`x = 3\` ist ein **Wert** (keine Heap-Box); \`xs = [1, 2]\` ist eine **Referenz** (Pfeil auf eine Heap-Liste).
+      lesson: `Lege beide Arten von Objekten in einen Frame. Beide Namen sind Referenzen: \`x\` zeigt auf das int 3, \`xs\` zeigt auf eine Liste.
 
-Der Visualizer hält diesen Unterschied sichtbar: \`x\` steht allein im Frame, während \`xs\` eine amber Kante zu einer Box mit sich führt. Kopierst du einen Wert, kopierst du die Zahl; kopierst du eine Referenz, kopierst du den Pfeil.`,
+Der entscheidende Unterschied ist die **Veränderbarkeit (Mutability)**. Ein int kann sich niemals in-place ändern; daher zeichnet das Canvas es inline neben seinem Namen, und nichts geht verloren. Eine Liste kann sich in-place ändern und bekommt daher ihre eigene Box auf dem Heap: So siehst du, wenn mehrere Namen dieselbe Liste teilen. Wenn du einen Namen kopierst, kopierst du immer den Pfeil. Bei einem unveränderlichen Objekt ist das harmlos; bei einem veränderbaren ist es die Ursache für Aliasing-Fehler.`,
     },
     'shared-value': {
       name: 'Zwei Namen, ein Wert',
-      brief: 'Bindet `a = 3` und dann `b = a`. Anders als bei einer Liste bekommt `b` seine eigene Kopie des Werts 3 — es gibt keine geteilte Box.',
+      brief: 'Bindet `a = 3`, dann `b = a`. Beide Namen zeigen nun auf dasselbe int-Objekt. Da sich ein int niemals in-place ändern kann, ist das Teilen völlig harmlos.',
       learning: [
-        'Einen Wert zuzuweisen kopiert den Wert',
-        'Eine Referenz zuzuweisen kopiert den Pfeil',
+        '`b = a` teilt immer das Objekt; es kopiert niemals',
+        'Ein unveränderliches Objekt zu teilen ist harmlos: es kann sich nicht unter dir verändern',
       ],
       fieldNotes: [
-        'Deshalb kannst du einen int bedenkenlos „neu binden“ ohne Seiteneffekte',
+        'Deshalb kannst du ein int bedenkenlos „neu binden“ ohne Seiteneffekte',
         'Unveränderliche Werte machen Defaults in Funktions-Signaturen sicher',
       ],
-      lesson: `Bei einem kleinen int kopiert \`b = a\` den **Wert**, keine Referenz. Beide Namen zeigen auf die Zahl 3, aber es gibt kein Heap-Objekt, das sie verbindet.
+      lesson: `\`b = a\` kopiert niemals etwas: es lässt \`b\` auf dasselbe Objekt zeigen wie \`a\`. Hier ist dieses Objekt das int 3, also referenzieren beide Namen darauf (das Level \`identity-is\` zeigt, wie man dies mit \`is\` prüft).
 
-Vergleiche das mit einer Liste (nächste Serie): Bei einer Liste teilt \`b = a\` ein einzelnes Objekt. Ob eine Zuweisung teilt oder kopiert, hängt allein davon ab, ob der Wert ein Heap-Objekt ist.`,
+Das ist dieselbe Regel wie bei einer Liste in der nächsten Serie. Der Unterschied ist, dass ein int nicht in-place geändert werden kann, sodass das Teilen dich niemals überrascht. Das Canvas zeigt nur deshalb keine geteilte Box, weil es kleine ints inline darstellt.`,
     },
     'list-update-in-place': {
       name: 'List in-place aktualisieren',
