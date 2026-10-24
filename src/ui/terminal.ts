@@ -102,6 +102,7 @@ export class TerminalView {
   private wordCycle: string[] = [];
   private wordIdx = 0;
   private wordKey = '';
+  private allowTabExit = false;
   private onSubmit: (cmd: string) => void;
   private onOpenEditor: () => void;
 
@@ -387,6 +388,15 @@ export class TerminalView {
       return;
     }
     if (e.key === 'Tab') {
+      if (e.shiftKey) {
+        // Shift+Tab exits focus backward without keyboard trap
+        return;
+      }
+      if (this.allowTabExit) {
+        // Esc was pressed: allow Tab to exit focus forward
+        this.allowTabExit = false;
+        return;
+      }
       this.applyTab(e);
       return;
     }
@@ -402,12 +412,14 @@ export class TerminalView {
     }
     if (e.key === 'Escape') {
       e.preventDefault();
+      this.allowTabExit = true;
       this.inputEl.value = '';
       this.wordCycle = [];
       this.wordKey = '';
       this.syncGhost();
       return;
     }
+    this.allowTabExit = false;
     if (e.key === 'Enter') {
       e.preventDefault();
       if (document.querySelector('.overlay .modal')) return;
