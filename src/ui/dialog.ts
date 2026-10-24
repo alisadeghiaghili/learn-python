@@ -12,7 +12,8 @@ export function escapeHtml(s: string): string {
     .replaceAll('"', '&quot;');
 }
 
-function renderInline(raw: string): string {
+export function renderInline(raw: string): string {
+  if (!raw) return '';
   const slots: string[] = [];
   const parts = raw.split(/(<a\b[\s\S]*?<\/a>)/gi);
   const mapped = parts
@@ -24,6 +25,7 @@ function renderInline(raw: string): string {
       let t = escapeHtml(part);
       t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
       t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(/(^|[^*])\*([^*]+)\*([^*]|$)/g, '$1<em>$2</em>$3');
       t = t.replace(
         /\[([^\]]+)\]\(([^)\s]+)\)/g,
         (_m, label: string, href: string) =>

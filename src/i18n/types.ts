@@ -5,6 +5,8 @@
  * series titles and deep lessons) is localized.
  */
 
+import type { EliBand } from '../engine/types';
+
 export type Locale = 'en' | 'de' | 'fa';
 
 export const LOCALES: Locale[] = ['en', 'de', 'fa'];
@@ -51,6 +53,7 @@ export interface UiCopy {
   supportTitle: string;
   titleLine: (idx: number, name: string) => string;
   sandboxTitle: string;
+  eliBands: Record<EliBand, string>;
 
   // —— terminal meta
   sandboxWelcome: string;

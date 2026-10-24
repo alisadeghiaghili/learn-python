@@ -31,6 +31,13 @@ export const fa: Catalog = {
     supportTitle: 'برایم قهوه بخر',
     titleLine: (idx, name) => `مرحله ${idx} · ${name}`,
     sandboxTitle: 'ساندباکس',
+    eliBands: {
+      eli5: 'مبتدی',
+      eli10: 'مقدماتی',
+      eli15: 'متوسط',
+      eli20: 'پیشرفته',
+      eliphd: 'استاد',
+    },
 
     sandboxWelcome: 'ساندباکس learnpython. عبارات Python بنویسید یا `help` را بزنید.',
     levelMeta: (name) => `مرحله: ${name}`,

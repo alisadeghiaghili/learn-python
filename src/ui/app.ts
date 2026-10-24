@@ -15,7 +15,7 @@ import { renderMemory, renderRam } from './memory';
 import { BoardView } from './board';
 import { TerminalView } from './terminal';
 import { ScriptEditorView } from './editor';
-import { escapeHtml, renderMarkdown, showModal, type ModalSpec } from './dialog';
+import { escapeHtml, renderInline, renderMarkdown, showModal, type ModalSpec } from './dialog';
 import { startUiTour, uiHelpModalHtml } from './ui-help';
 import { formatVisitorCount, startVisitorCounter } from './visitor-counter';
 import { getLocale, LOCALES, localizeLevel, localizeSequence, setLocale, ui } from '../i18n';
@@ -433,7 +433,9 @@ export class App {
   private updateTitle(): void {
     if (this.level) {
       const idx = levelIndex(this.level.id) + 1;
-      this.titleEl.textContent = ui().titleLine(idx, this.level.name);
+      const u = ui();
+      const eliText = u.eliBands[this.level.eli] ?? this.level.eli;
+      this.titleEl.innerHTML = `${escapeHtml(u.titleLine(idx, this.level.name))} <span class="eli-badge eli-${this.level.eli}" title="ELI band: ${escapeHtml(eliText)}">${escapeHtml(eliText)}</span>`;
     } else {
       this.titleEl.textContent = ui().sandboxTitle;
     }
@@ -563,18 +565,24 @@ export class App {
 
     const nextRaw = allLevels()[levelIndex(level.id) + 1];
     const next = nextRaw ? localizeLevel(nextRaw) : undefined;
-    const cheer = CHEERS[Math.floor(Math.random() * CHEERS.length)]!;
+    const seq = sequenceForLevel(level.id);
+    const cheer = (seq && SERIES_CHEERS[seq.id]) ? SERIES_CHEERS[seq.id]! : 'Objective completed successfully.';
+    const isOnPar = used <= par;
+    const stars = isOnPar ? '★★★' : '★★☆';
     const bodyHtml = `
       <div class="celebrate" aria-live="polite">
         <div class="celebrate-visual" aria-hidden="true">
           <div class="celebrate-ring"></div>
           <div class="celebrate-star">★</div>
         </div>
+        <div class="celebrate-stars" aria-label="${isOnPar ? '3 out of 3 stars' : '2 out of 3 stars'}">${stars}</div>
         <div class="celebrate-badge">${escapeHtml(u.celebrateBadge)}</div>
         <h3 class="celebrate-title">${escapeHtml(level.name)}</h3>
         <p class="celebrate-sub"><code>${escapeHtml(level.id)}</code></p>
         <p class="celebrate-cheer">${escapeHtml(cheer)}</p>
         <div class="celebrate-stats">${u.celebrateStats(used, par)}</div>
+        ${level.learning?.length ? `<div class="celebrate-takeaway"><strong>Key takeaway:</strong> ${renderInline(level.learning[0]!)}</div>` : ''}
+        ${level.lesson ? `<div class="celebrate-lesson"><div class="celebrate-lesson-title">Lesson Overview</div>${renderMarkdown(level.lesson)}</div>` : ''}
         ${
           next
             ? `<div class="celebrate-next">${renderMarkdown(u.celebrateNext(next.name))}</div>`
@@ -590,7 +598,7 @@ export class App {
       actions.push({
         label: u.nextAction(next.name),
         className: 'primary',
-        onClick: () => this.enterLevel(next.id, { openLesson: true }),
+        onClick: () => this.enterLevel(next.id, { openLesson: false }),
       });
     } else {
       actions.push({
@@ -652,28 +660,28 @@ export class App {
       </li>`;
     }).join('');
 
-    const firstNext = currentId !== -1 ? solutionCmds[currentId]?.split('\n')[0] : solutionCmds[0]?.split('\n')[0];
     const nextBlock = solved
       ? `<div class="next-box met">${escapeHtml(u.allChecksPassed)}</div>`
       : `<div class="next-box">
           <div class="next-title">${escapeHtml(u.nextTitle)}</div>
           <div class="next-row">
-            <span class="g-label">${escapeHtml(u.tryLabel)}</span>
-            ${firstNext ? `<code class="g-cmd g-step-cmd" data-cmd="${escapeHtml(firstNext)}" dir="ltr" title="Click to fill into terminal">${escapeHtml(firstNext)}</code>` : ''}
+            <span class="g-label">${escapeHtml(u.nowChip)}</span>
+            <span class="g-pending-goal">${escapeHtml(checks.find((c) => !c.passed)?.label ?? level.brief)}</span>
           </div>
         </div>`;
 
+    const eliText = u.eliBands[level.eli] ?? level.eli;
     this.checkResults = checks;
     this.dockEl.innerHTML = `
-      <h2>${escapeHtml(level.name)}</h2>
+      <h2>${escapeHtml(level.name)} <span class="eli-badge eli-${level.eli}">${escapeHtml(eliText)}</span></h2>
       <p class="objective">${renderMarkdown(level.brief)}</p>
       ${level.learning?.length ? `<div class="learning-box">
         <div class="next-title">${escapeHtml(u.youAreLearning)}</div>
-        <ul>${level.learning.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>
+        <ul>${level.learning.map((x) => `<li>${renderInline(x)}</li>`).join('')}</ul>
       </div>` : ''}
       ${level.fieldNotes?.length ? `<div class="field-box">
         <div class="next-title">${escapeHtml(u.fieldNotesTitle)}</div>
-        <ul>${level.fieldNotes.map((x) => `<li>${escapeHtml(x)}</li>`).join('')}</ul>
+        <ul>${level.fieldNotes.map((x) => `<li>${renderInline(x)}</li>`).join('')}</ul>
       </div>` : ''}
       <div class="par-note">${this.bestNote(level)}</div>
       ${nextBlock}
@@ -824,13 +832,15 @@ export class App {
             const solved = Boolean(p?.solved);
             const active = this.level?.id === l.id;
             const isStart = l.id === firstId;
+            const eliText = u.eliBands[l.eli] ?? l.eli;
             return `<button type="button" class="level-row ${solved ? 'solved' : ''}${active ? ' active' : ''}${isStart ? ' start-here' : ''}" data-level="${l.id}">
               <span class="id">${isStart ? '▶ ' : ''}${escapeHtml(l.id)}</span>
               <span class="name">${escapeHtml(l.name)}</span>
+              <span class="eli-tag eli-${l.eli}">${escapeHtml(eliText)}</span>
               <span class="chip ${solved ? 'ok' : ''}" title="${escapeHtml(u.legendDifficulty)} ${l.difficulty}/5" aria-label="${escapeHtml(u.legendDifficulty)} ${l.difficulty} / 5">
                 ${solved ? `✓ ${p?.bestStatements ?? l.par}` : `<span class="diff-dots" aria-hidden="true">${renderDiffDots(l.difficulty)}</span>`}
               </span>
-              <span class="par-note">ideal ${l.par} command${l.par === 1 ? '' : 's'}</span>
+              <span class="par-note">${escapeHtml(u.idealSolution(l.par))}</span>
             </button>`;
           })
           .join('');
@@ -1016,13 +1026,24 @@ pytest
 
 /* —— helpers —— */
 
-const CHEERS = [
-  'That object is well understood.',
-  'The reference graph makes sense now.',
-  'Names and objects, clearly separated.',
-  'Nice — you traced the alias.',
-  'The heap behaves as you expected.',
-];
+const SERIES_CHEERS: Record<string, string> = {
+  basics: 'Variables, types, and print, clearly grasped.',
+  names: 'Names and object bindings, clearly separated.',
+  aliasing: 'You traced the shared reference and alias graph.',
+  mutation: 'In-place container mutation mastered.',
+  containers: 'Container memory structures, mapped on the heap.',
+  'copy-semantics': 'Shallow vs deep copies, clearly distinguished.',
+  flow: 'Branch conditions and execution paths traced.',
+  loops: 'Loop iteration and step progression verified.',
+  functions: 'Call stack frames and local scopes understood.',
+  iterators: 'Iterator states and lazy streams traced.',
+  functional: 'Higher-order function evaluation clear.',
+  numpy: 'NumPy buffer layout and array views mastered.',
+  pandas: 'DataFrame buffer structure and slicing clear.',
+  plotting: 'Data-driven visual plotting generated.',
+  threading: 'Thread interleavings and race prevention verified.',
+  asyncio: 'Asynchronous coroutine suspension points traced.',
+};
 
 function loadProgress(): Progress {
   try {

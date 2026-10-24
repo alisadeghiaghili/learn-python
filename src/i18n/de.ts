@@ -31,6 +31,13 @@ export const de: Catalog = {
     supportTitle: 'Kaffee spendieren',
     titleLine: (idx, name) => `Level ${idx} · ${name}`,
     sandboxTitle: 'Sandbox',
+    eliBands: {
+      eli5: 'Anfänger',
+      eli10: 'Grundstufe',
+      eli15: 'Mittelstufe',
+      eli20: 'Fortgeschritten',
+      eliphd: 'Meister',
+    },
 
     sandboxWelcome: 'learnpython-Sandbox. Tippe Python-Statements ein, oder `help`.',
     levelMeta: (name) => `Level: ${name}`,

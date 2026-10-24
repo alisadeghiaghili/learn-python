@@ -1375,6 +1375,68 @@ button.ghost,
   font-size: 13px;
 }
 
+.celebrate-stars {
+  font-size: 22px;
+  color: var(--amber);
+  margin-bottom: 8px;
+  letter-spacing: 4px;
+}
+
+.celebrate-takeaway {
+  margin: 0 auto 12px;
+  max-width: 420px;
+  background: rgba(91, 196, 176, 0.1);
+  border: 1px solid rgba(91, 196, 176, 0.25);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text);
+  text-align: start;
+}
+
+.celebrate-lesson {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  text-align: start;
+  font-size: 13px;
+  line-height: 1.5;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.celebrate-lesson-title {
+  font-size: 11px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.eli-badge, .eli-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-family: var(--mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+.eli-badge {
+  margin-left: 8px;
+}
+.eli-eli5 { background: rgba(91, 196, 176, 0.15); color: #5bc4b0; border: 1px solid rgba(91, 196, 176, 0.3); }
+.eli-eli10 { background: rgba(100, 180, 246, 0.15); color: #64b5f6; border: 1px solid rgba(100, 180, 246, 0.3); }
+.eli-eli15 { background: rgba(240, 160, 80, 0.15); color: #f0a050; border: 1px solid rgba(240, 160, 80, 0.3); }
+.eli-eli20 { background: rgba(255, 138, 101, 0.15); color: #ff8a65; border: 1px solid rgba(255, 138, 101, 0.3); }
+.eli-eliphd { background: rgba(186, 104, 200, 0.15); color: #ba68c8; border: 1px solid rgba(186, 104, 200, 0.3); }
+
 .celebrate-next {
   color: var(--haze);
   font-size: 13px;
