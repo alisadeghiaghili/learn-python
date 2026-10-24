@@ -60,6 +60,7 @@ export function run(source: string, state: MemoryState): MemoryState {
     if (traceEnabled) state.trace = [cloneState(state)]; // frame 0: state before running
     const ast = parse(source);
     for (const stmt of ast) {
+      if (stmt.line) state.currentLine = stmt.line;
       if (stmt.kind === 'ExprStatement') {
         // REPL-style: a bare top-level expression shows its value. `print()`
         // and mutating calls like `a.append(..)` return None, so they stay
@@ -69,7 +70,7 @@ export function run(source: string, state: MemoryState): MemoryState {
       } else {
         execStatement(stmt, state);
       }
-      recordStep(state); // after each top-level statement
+      recordStep(state, stmt.line); // after each top-level statement
     }
     // A nested child may have been mutated in place (e.g. a[1].append(3)),
     // leaving a parent container's cached repr stale. Recompute container
@@ -148,10 +149,11 @@ export function isTraceEnabled(): boolean {
 }
 
 /** Push the current state onto `state.trace` (cloned, trace stripped), if enabled. */
-function recordStep(state: MemoryState): void {
+function recordStep(state: MemoryState, line?: number): void {
   if (!traceEnabled) return;
   const arr = state.trace;
   if (!arr || arr.length >= TRACE_CAP) return;
+  if (line !== undefined) state.currentLine = line;
   const frame = cloneState(state);
   delete frame.trace; // don't nest the growing array inside every frame
   arr.push(frame);
@@ -326,6 +328,7 @@ function makeRange(args: RtValue[], state: MemoryState, line: number): RtValue {
  * Execute one statement.
  */
 function execStatement(node: AstNode, state: MemoryState): void {
+  if (node.line) state.currentLine = node.line;
   switch (node.kind) {
     case 'Assign': {
       const value = evalExpr(node.value, state);
@@ -383,12 +386,22 @@ function execStatement(node: AstNode, state: MemoryState): void {
           paramDefaults[p] = evalExpr(expr, state);
         }
       }
+      const closure: Record<string, { value: RtValue }> = {};
+      for (let i = state.frames.length - 1; i >= 1; i--) {
+        const f = state.frames[i]!;
+        for (const [k, v] of Object.entries(f.locals)) {
+          if (!(k in closure)) {
+            closure[k] = { value: v };
+          }
+        }
+      }
       const fn = allocObject(
         'function',
         {
           name: node.name,
           params: [...node.params],
           paramDefaults,
+          closure: Object.keys(closure).length > 0 ? closure : undefined,
           body: node.body,
         } as FunctionCode,
         `function ${node.name}`
@@ -652,6 +665,11 @@ function lookupName(name: string, state: MemoryState, line: number): RtValue {
     if (name in state.frames[i].locals) {
       return state.frames[i].locals[name]!;
     }
+  }
+
+  const curFrame = current as Frame & { closure?: Record<string, { value: RtValue }> };
+  if (curFrame.closure && name in curFrame.closure) {
+    return curFrame.closure[name]!.value;
   }
 
   if (['int', 'float', 'str', 'bool', 'list', 'dict', 'tuple', 'set', 'range', 'type'].includes(name)) {
@@ -1117,13 +1135,18 @@ function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, li
     }
     throw new PyTypeError(`object is not callable (line ${line})`);
   }
-  const { name, params, paramDefaults, body, async: isAsync } = fn.value as FunctionCode;
+  const { name, params, paramDefaults, closure, body, async: isAsync } = fn.value as FunctionCode;
   if (isAsync) {
     return makeCoroutine(name, params, body, args, fnId as string, state);
   }
 
   const scope = analyzeLocals(body);
-  const frame: Frame & { scopeInfo?: ScopeInfo } = { name, locals: {}, scopeInfo: scope };
+  const frame: Frame & { scopeInfo?: ScopeInfo; closure?: Record<string, { value: RtValue }> } = {
+    name,
+    locals: {},
+    scopeInfo: scope,
+    closure: closure ? { ...closure } : undefined,
+  };
   for (let i = 0; i < params.length; i++) {
     const p = params[i]!;
     if (i < args.length) {

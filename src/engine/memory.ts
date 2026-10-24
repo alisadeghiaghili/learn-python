@@ -354,6 +354,19 @@ function nestedRefs(obj: HeapObject | undefined): string[] {
   // An iterator holds a reference to the iterable it walks — keep that source
   // alive and let the canvas draw the iterator → source edge.
   if (isIteratorValue(value)) return [value.source];
+  // Function closures: keep referenced cell objects alive and counted
+  if (type === 'function' && typeof value === 'object' && value !== null) {
+    const fnVal = value as { closure?: Record<string, { value: RtValue }> };
+    if (fnVal.closure) {
+      const refs: string[] = [];
+      for (const cell of Object.values(fnVal.closure)) {
+        if (typeof cell.value === 'string' && cell.value.startsWith('obj_')) {
+          refs.push(cell.value);
+        }
+      }
+      return refs;
+    }
+  }
   return [];
 }
 

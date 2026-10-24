@@ -35,7 +35,49 @@ interface Pos {
  * @param edges - from referenceEdges()
  * @param liveIds - live object ids in allocation order
  */
-export function renderMemory(svg: SVGSVGElement, state: MemoryState, edges: RefEdge[], liveIds: string[]): void {
+export function isScalarValue(v: RtValue, state: MemoryState): boolean {
+  if (v === null || typeof v === 'boolean' || typeof v === 'number' || typeof v === 'bigint') {
+    return true;
+  }
+  if (typeof v === 'string') {
+    const obj = state.heap[v];
+    if (obj) {
+      return obj.type === 'int' || obj.type === 'float' || obj.type === 'str' || obj.type === 'bool';
+    }
+    return !v.startsWith('obj_');
+  }
+  return false;
+}
+
+export function scalarDetails(v: RtValue, state: MemoryState): { repr: string; type: string; raw: unknown } {
+  if (v === null) return { repr: 'None', type: 'NoneType', raw: null };
+  if (typeof v === 'boolean') return { repr: v ? 'True' : 'False', type: 'bool', raw: v };
+  if (typeof v === 'number') {
+    return Number.isInteger(v)
+      ? { repr: String(v), type: 'int', raw: v }
+      : { repr: String(v), type: 'float', raw: v };
+  }
+  if (typeof v === 'bigint') return { repr: v.toString(), type: 'int', raw: v };
+  if (typeof v === 'string') {
+    const obj = state.heap[v];
+    if (obj) return { repr: obj.repr, type: obj.type, raw: obj.value };
+    return { repr: JSON.stringify(v), type: 'str', raw: v };
+  }
+  return { repr: String(v), type: 'object', raw: v };
+}
+
+export interface MemoryRenderOptions {
+  showScalarsOnHeap?: boolean;
+  onToggleScalars?: () => void;
+}
+
+export function renderMemory(
+  svg: SVGSVGElement,
+  state: MemoryState,
+  edges: RefEdge[],
+  liveIds: string[],
+  options: MemoryRenderOptions = {}
+): void {
   while (svg.firstChild) svg.removeChild(svg.firstChild);
 
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
@@ -46,7 +88,114 @@ export function renderMemory(svg: SVGSVGElement, state: MemoryState, edges: RefE
   `;
   svg.appendChild(defs);
 
-  const layout = computeLayout(state, liveIds);
+  const showScalars = options.showScalarsOnHeap ?? false;
+
+  // Build active heap and live IDs for display
+  const displayHeap: Record<string, any> = { ...state.heap };
+  const displayLiveIds = [...liveIds];
+  const displayEdges: RefEdge[] = [];
+
+  let scalarCount = 0;
+  const smallIntBoxId = (n: number | bigint) => `scalar_int_${n}`;
+
+  if (showScalars) {
+    for (const frame of state.frames) {
+      for (const [name, targetId] of Object.entries(frame.locals)) {
+        if (isScalarValue(targetId, state)) {
+          scalarCount++;
+          const details = scalarDetails(targetId, state);
+          let boxId: string;
+
+          if (details.type === 'int' && typeof details.raw === 'number' && details.raw >= -5 && details.raw <= 256) {
+            boxId = smallIntBoxId(details.raw);
+            if (!displayHeap[boxId]) {
+              displayHeap[boxId] = {
+                id: boxId,
+                type: 'int',
+                repr: details.repr,
+                value: details.raw,
+                addr: 0x0500 + (details.raw + 5) * 8,
+                byteSize: 28,
+                refCount: 1,
+                seg: 'heap',
+              };
+              displayLiveIds.push(boxId);
+            }
+          } else if (details.type === 'bool') {
+            boxId = `scalar_bool_${details.repr}`;
+            if (!displayHeap[boxId]) {
+              displayHeap[boxId] = {
+                id: boxId,
+                type: 'bool',
+                repr: details.repr,
+                value: details.raw,
+                addr: details.raw ? 0x0400 : 0x0408,
+                byteSize: 28,
+                refCount: 1,
+                seg: 'heap',
+              };
+              displayLiveIds.push(boxId);
+            }
+          } else if (details.type === 'NoneType') {
+            boxId = 'scalar_none';
+            if (!displayHeap[boxId]) {
+              displayHeap[boxId] = {
+                id: boxId,
+                type: 'NoneType',
+                repr: 'None',
+                value: null,
+                addr: 0x0300,
+                byteSize: 16,
+                refCount: 1,
+                seg: 'heap',
+              };
+              displayLiveIds.push(boxId);
+            }
+          } else if (typeof targetId === 'string' && state.heap[targetId]) {
+            boxId = targetId;
+            if (!displayLiveIds.includes(boxId)) displayLiveIds.push(boxId);
+          } else {
+            boxId = `scalar_${frame.name}_${name}`;
+            if (!displayHeap[boxId]) {
+              displayHeap[boxId] = {
+                id: boxId,
+                type: details.type,
+                repr: details.repr,
+                value: details.raw,
+                addr: 0x2000 + displayLiveIds.length * 16,
+                byteSize: 32,
+                refCount: 1,
+                seg: 'heap',
+              };
+              displayLiveIds.push(boxId);
+            }
+          }
+
+          displayEdges.push({ fromFrame: frame.name, name, toId: boxId });
+        } else if (typeof targetId === 'string' && state.heap[targetId]) {
+          displayEdges.push({ fromFrame: frame.name, name, toId: targetId });
+        }
+      }
+    }
+  } else {
+    for (const frame of state.frames) {
+      for (const targetId of Object.values(frame.locals)) {
+        if (isScalarValue(targetId, state)) scalarCount++;
+      }
+    }
+    for (const edge of edges) {
+      if (state.heap[edge.toId] && !isScalarValue(edge.toId, state)) {
+        displayEdges.push(edge);
+      }
+    }
+  }
+
+  const displayState: MemoryState = {
+    ...state,
+    heap: displayHeap,
+  };
+
+  const layout = computeLayout(displayState, displayLiveIds);
   svg.setAttribute('viewBox', `0 0 ${layout.width} ${layout.height}`);
   svg.setAttribute('width', '100%');
   svg.setAttribute('height', String(Math.max(layout.height, 280)));
@@ -55,22 +204,56 @@ export function renderMemory(svg: SVGSVGElement, state: MemoryState, edges: RefE
   addText(svg, 12, 18, 'STACK', COLORS.muted, 11, 'start', 'middle');
   addText(svg, layout.heapX, 18, 'HEAP', COLORS.muted, 11, 'start', 'middle');
 
+  // Subtle Chip for scalar display toggle
+  if (scalarCount > 0 || showScalars) {
+    const chipText = showScalars
+      ? 'Showing all objects on heap · [inline scalars]'
+      : `${scalarCount} scalar${scalarCount > 1 ? 's' : ''} drawn inline · [show on heap]`;
+    const chipG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    chipG.style.cursor = 'pointer';
+    chipG.setAttribute('role', 'button');
+    chipG.setAttribute('tabindex', '0');
+    chipG.setAttribute('aria-label', chipText);
+    const chipY = 18;
+    const chipX = layout.width - 12;
+    addText(chipG, chipX, chipY, chipText, COLORS.amber, 11, 'end', 'middle', 'IBM Plex Mono, monospace');
+    chipG.addEventListener('click', () => {
+      options.onToggleScalars?.();
+    });
+    chipG.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        options.onToggleScalars?.();
+      }
+    });
+    svg.appendChild(chipG);
+  }
+
   const namePositions = new Map<string, Pos & { name: string; targetId: RtValue; frame: string }>();
   const objectPositions = new Map<string, Pos>();
 
   // Stack frames (drawn bottom-up as call stack: module at bottom)
   let y = 40;
-  for (const frame of state.frames) {
+  for (const frame of displayState.frames) {
     const names = Object.keys(frame.locals);
     const h = 36 + Math.max(1, names.length) * NAME_H;
-    drawFrame(svg, 12, y, FRAME_W, h, frame, frame === state.frames[state.frames.length - 1]);
+    drawFrame(svg, 12, y, FRAME_W, h, frame, frame === displayState.frames[displayState.frames.length - 1]);
     let ny = y + 36;
     for (const name of names) {
       const targetId = frame.locals[name];
       namePositions.set(`${frame.name}:${name}`, { x: 12 + FRAME_W, y: ny + NAME_H / 2, name, targetId, frame: frame.name });
       addText(svg, 24, ny + NAME_H / 2, name, COLORS.ink, 13, 'start', 'middle', 'IBM Plex Mono, monospace');
-      const kind = valueKind(targetId, state);
-      addText(svg, 12 + FRAME_W - 12, ny + NAME_H / 2, kind, COLORS.muted, 10, 'end', 'middle');
+
+      const isScalar = isScalarValue(targetId, state);
+      if (!showScalars && isScalar) {
+        const details = scalarDetails(targetId, state);
+        const valText = `= ${details.repr}`;
+        addText(svg, 24 + name.length * 8 + 8, ny + NAME_H / 2, valText, COLORS.amber, 12, 'start', 'middle', 'IBM Plex Mono, monospace');
+        addText(svg, 12 + FRAME_W - 12, ny + NAME_H / 2, details.type, COLORS.muted, 10, 'end', 'middle');
+      } else {
+        const kind = valueKind(targetId, displayState);
+        addText(svg, 12 + FRAME_W - 12, ny + NAME_H / 2, kind, COLORS.muted, 10, 'end', 'middle');
+      }
       ny += NAME_H;
     }
     y += h + 12;
@@ -78,11 +261,11 @@ export function renderMemory(svg: SVGSVGElement, state: MemoryState, edges: RefE
 
   // Heap objects
   let hy = 40;
-  for (const id of liveIds) {
-    const obj = state.heap[id];
+  for (const id of displayLiveIds) {
+    const obj = displayHeap[id];
     if (!obj) continue;
     const h = objectHeight(obj);
-    drawObject(svg, layout.heapX, hy, layout.objW, h, obj, liveIds);
+    drawObject(svg, layout.heapX, hy, layout.objW, h, obj, displayLiveIds);
     objectPositions.set(id, {
       x: layout.heapX,
       y: hy + h / 2,
@@ -93,7 +276,7 @@ export function renderMemory(svg: SVGSVGElement, state: MemoryState, edges: RefE
   }
 
   // Reference edges from names to objects
-  for (const edge of edges) {
+  for (const edge of displayEdges) {
     const from = namePositions.get(`${edge.fromFrame}:${edge.name}`);
     const to = objectPositions.get(edge.toId);
     if (!from || !to) continue;
@@ -101,8 +284,8 @@ export function renderMemory(svg: SVGSVGElement, state: MemoryState, edges: RefE
   }
 
   // Nested container edges (list/dict slots → child objects)
-  for (const id of liveIds) {
-    const obj = state.heap[id];
+  for (const id of displayLiveIds) {
+    const obj = displayHeap[id];
     const from = objectPositions.get(id);
     if (!obj || !from) continue;
     const refs = containerRefs(obj);
@@ -452,7 +635,7 @@ export function renderRam(svg: SVGSVGElement, state: MemoryState, liveIds: strin
   addText(svg, COL_OBJ, 18, 'OBJ', COLORS.muted, 10, 'start', 'middle', mono);
   addText(svg, COL_TYPE, 18, 'TYPE', COLORS.muted, 10, 'start', 'middle', mono);
   addText(svg, COL_BYTES, 18, 'BYTES', COLORS.muted, 10, 'start', 'middle', mono);
-  addText(svg, COL_REF, 18, 'REFC', COLORS.muted, 10, 'start', 'middle', mono);
+  addText(svg, COL_REF, 18, 'REFS', COLORS.muted, 10, 'start', 'middle', mono);
   addText(svg, COL_VALUE, 18, 'VALUE', COLORS.muted, 10, 'start', 'middle', mono);
 
   // Empty-state: nothing allocated on the heap yet. Small numbers, booleans,
@@ -489,7 +672,12 @@ export function renderRam(svg: SVGSVGElement, state: MemoryState, liveIds: strin
     addText(svg, COL_OBJ, midY, obj.id, COLORS.ink, 11, 'start', 'middle', mono);
     addText(svg, COL_TYPE, midY, obj.type, COLORS.teal, 11, 'start', 'middle', mono);
     addText(svg, COL_BYTES, midY, String(obj.byteSize), COLORS.ink, 11, 'start', 'middle', mono);
-    addText(svg, COL_REF, midY, String(obj.refCount), obj.refCount === 0 ? COLORS.coral : COLORS.ink, 11, 'start', 'middle', mono);
+    const refG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const refTitle = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    refTitle.textContent = `References from program: ${obj.refCount}`;
+    refG.appendChild(refTitle);
+    addText(refG, COL_REF, midY, String(obj.refCount), obj.refCount === 0 ? COLORS.coral : COLORS.ink, 11, 'start', 'middle', mono);
+    svg.appendChild(refG);
 
     if (isBuffer) {
       const data = (obj.value as { data?: number[] }).data ?? [];

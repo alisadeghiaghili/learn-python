@@ -81,6 +81,8 @@ export interface MemoryState {
    * iteration. Ignored by snapshot()/goals — a pure replay aid for the canvas.
    */
   trace?: MemoryState[];
+  /** 1-based source line currently executing, for editor replay highlighting. */
+  currentLine?: number;
 }
 
 /* —— Tokens —— */
