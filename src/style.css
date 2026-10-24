@@ -420,7 +420,7 @@ button.ghost,
 .board-wrap {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: 200px;
   overflow: hidden;
   background: var(--bg);
 }
@@ -432,6 +432,32 @@ button.ghost,
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.scalar-toggle-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--haze);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+  margin-left: auto;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.scalar-toggle-chip:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.scalar-toggle-chip[aria-pressed="true"] {
+  border-color: var(--teal);
+  color: var(--teal);
+  background: rgba(91, 196, 176, 0.1);
 }
 
 .board-tabs {
@@ -482,6 +508,67 @@ button.ghost,
   padding: 6px 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.step-slider {
+  flex: 1;
+  min-width: 60px;
+  max-width: 160px;
+  accent-color: var(--amber);
+  cursor: pointer;
+  height: 4px;
+}
+
+.step-speed-group {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.step-speed-btn {
+  background: var(--panel-2);
+  border: none;
+  color: var(--haze);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 4px 6px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.step-speed-btn:hover {
+  color: var(--text);
+}
+
+.step-speed-btn.is-active {
+  background: var(--amber);
+  color: #12181b;
+  font-weight: 700;
+}
+
+.editor-line-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: rgba(240, 160, 80, 0.15);
+  color: var(--amber);
+  border: 1px solid rgba(240, 160, 80, 0.3);
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin-left: 8px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
 }
 
 .step-label {
@@ -565,7 +652,8 @@ button.ghost,
 
 .canvas-wrap svg {
   display: block;
-  min-width: 420px;
+  min-width: 320px;
+  max-width: 100%;
 }
 
 .ref-edge {

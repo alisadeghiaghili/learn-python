@@ -35,6 +35,31 @@ export class ScriptEditorView {
     return this.isExpanded;
   }
 
+  highlightLine(line?: number): void {
+    const badge = this.root.querySelector<HTMLElement>('#editor-line-badge');
+    if (badge) {
+      if (line !== undefined && line > 0) {
+        badge.textContent = `▶ Line ${line}`;
+        badge.hidden = false;
+      } else {
+        badge.hidden = true;
+      }
+    }
+
+    if (line !== undefined && line > 0 && this.textarea) {
+      const text = this.textarea.value;
+      const lines = text.split('\n');
+      if (line <= lines.length) {
+        let startPos = 0;
+        for (let i = 0; i < line - 1; i++) {
+          startPos += (lines[i]?.length ?? 0) + 1;
+        }
+        const endPos = startPos + (lines[line - 1]?.length ?? 0);
+        this.textarea.setSelectionRange(startPos, endPos);
+      }
+    }
+  }
+
   private getCodeToRun(mode: 'line' | 'all' = 'line'): string {
     const val = this.textarea.value;
     if (!val.trim()) return '';
@@ -71,6 +96,7 @@ export class ScriptEditorView {
     this.root.innerHTML = `
       <div class="editor-bar">
         <span class="editor-title">Python Script</span>
+        <span class="editor-line-badge" id="editor-line-badge" hidden></span>
         <div class="editor-bar-actions">
           <button type="button" class="btn btn-sm primary" id="editor-run-btn" title="Run current line or selection (Ctrl+Enter)">
             <span>Run</span>

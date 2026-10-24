@@ -241,6 +241,7 @@ export class App {
         if (tab === 'ram') this.renderRamBoard();
       },
       (index) => this.renderStep(index),
+      () => this.renderBoard(),
     );
     this.editor = new ScriptEditorView(
       this.root.querySelector('#editor-drawer')!,
@@ -455,12 +456,20 @@ export class App {
     const state = this.currentFrame();
     const edges = referenceEdges(state);
     const live = liveObjectIds(state);
-    renderMemory(this.board.canvasEl, state, edges, live);
+    renderMemory(this.board.canvasEl, state, edges, live, {
+      showScalarsOnHeap: this.board.getScalarsOnHeap(),
+      onToggleScalars: () => {
+        this.board.setScalarsOnHeap(!this.board.getScalarsOnHeap());
+        this.renderBoard();
+      },
+    });
+    this.board.updateAccessibility(state);
   }
 
   private renderRamBoard(): void {
     const state = this.currentFrame();
     renderRam(this.board.ramCanvasEl, state, liveObjectIds(state));
+    this.board.updateAccessibility(state);
   }
 
   /** Redraw both memory boards so the Memory and RAM tabs stay in sync. */
@@ -472,6 +481,12 @@ export class App {
   /** The learner scrubbed the stepper: paint that recorded frame on both boards. */
   private renderStep(index: number): void {
     this.stepIndex = index;
+    const state = this.currentFrame();
+    if (state.currentLine) {
+      this.editor.highlightLine(state.currentLine);
+    } else {
+      this.editor.highlightLine(undefined);
+    }
     this.renderBoards();
   }
 

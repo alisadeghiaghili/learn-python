@@ -1,10 +1,9 @@
 /**
  * Tabbed board: the signature Memory canvas (stack frames → heap objects →
- * amber reference edges) and a Plot tab for the plotting levels (Phase C).
+ * amber reference edges), RAM board, and a Plot tab for plotting levels.
  *
- * The memory tab hosts a persistent `<svg id="canvas">` — `renderMemory` clears
- * and re-renders it on every state change, so the reference-edge draw animation
- * keeps firing without the tab being rebuilt.
+ * Includes stepper scrubber slider, autoplay transport controls, scalar heap
+ * toggle, and screen-reader accessible live text alternatives.
  */
 
 import type { MemoryState, PlotSpec } from '../engine/types';
@@ -117,27 +116,43 @@ export class BoardView {
   private ramTabBtn!: HTMLButtonElement;
   private stepperBar!: HTMLElement;
   private stepCounter!: HTMLElement;
+  private stepSlider!: HTMLInputElement;
   private btnFirst!: HTMLButtonElement;
   private btnPrev!: HTMLButtonElement;
   private btnPlay!: HTMLButtonElement;
+  private btnNext!: HTMLButtonElement;
   private btnLast!: HTMLButtonElement;
+  private scalarToggleBtn!: HTMLButtonElement;
+  private liveRegion!: HTMLElement;
+  private textAlt!: HTMLElement;
+
   private currentTab: BoardTab = 'memory';
   private plots: PlotSpec[] = [];
   private onTabChange?: (tab: BoardTab) => void;
   /** Called with the frame index (0..trace.length-1) when the user scrubs. */
   private onStep?: (index: number) => void;
+  private onToggleScalarsCb?: (show: boolean) => void;
+
   /** Recorded execution frames; empty = stepper hidden. */
   private trace: MemoryState[] = [];
   private stepIndex = 0;
+
+  // Autoplay state
+  private isPlaying = false;
+  private playTimer: number | null = null;
+  private playSpeed = 1; // 0.5, 1, 2
+  private showScalarsOnHeap = false;
 
   constructor(
     root: HTMLElement,
     onTabChange?: (tab: BoardTab) => void,
     onStep?: (index: number) => void,
+    onToggleScalars?: (show: boolean) => void,
   ) {
     this.root = root;
     this.onTabChange = onTabChange;
     this.onStep = onStep;
+    this.onToggleScalarsCb = onToggleScalars;
     this.render();
   }
 
@@ -149,6 +164,15 @@ export class BoardView {
   /** The live RAM canvas (App drives it via renderRam). */
   get ramCanvasEl(): SVGSVGElement {
     return this.ramCanvas;
+  }
+
+  getScalarsOnHeap(): boolean {
+    return this.showScalarsOnHeap;
+  }
+
+  setScalarsOnHeap(show: boolean): void {
+    this.showScalarsOnHeap = show;
+    this.updateScalarButton();
   }
 
   setTab(tab: BoardTab): void {
@@ -183,6 +207,7 @@ export class BoardView {
    * and jumps to the final frame. App renders each frame on scrub.
    */
   setTrace(frames: MemoryState[]): void {
+    this.pause();
     const changed = frames.length !== this.trace.length || frames !== this.trace;
     this.trace = frames;
     this.stepIndex = Math.max(frames.length - 1, 0);
@@ -190,11 +215,13 @@ export class BoardView {
     this.updateStepper();
   }
 
-  private stepNext(): void {
+  private stepNext(autoplay = false): void {
     if (this.stepIndex < this.trace.length - 1) {
       this.stepIndex++;
       this.updateStepper();
       this.onStep?.(this.stepIndex);
+    } else if (autoplay) {
+      this.pause();
     }
   }
 
@@ -223,15 +250,116 @@ export class BoardView {
     }
   }
 
+  private goToStep(index: number): void {
+    const clamped = Math.max(0, Math.min(this.trace.length - 1, index));
+    if (clamped !== this.stepIndex) {
+      this.stepIndex = clamped;
+      this.updateStepper();
+      this.onStep?.(this.stepIndex);
+    }
+  }
+
+  private togglePlay(): void {
+    if (this.isPlaying) {
+      this.pause();
+    } else {
+      if (this.stepIndex >= this.trace.length - 1) {
+        this.stepIndex = 0;
+        this.updateStepper();
+        this.onStep?.(0);
+      }
+      this.play();
+    }
+  }
+
+  private play(): void {
+    this.isPlaying = true;
+    if (this.btnPlay) {
+      this.btnPlay.textContent = '⏸';
+      this.btnPlay.title = 'Pause playback';
+      this.btnPlay.setAttribute('aria-label', 'Pause playback');
+    }
+    const interval = Math.round(800 / this.playSpeed);
+    if (this.playTimer) clearInterval(this.playTimer);
+    this.playTimer = window.setInterval(() => {
+      this.stepNext(true);
+    }, interval);
+  }
+
+  private pause(): void {
+    this.isPlaying = false;
+    if (this.playTimer) {
+      clearInterval(this.playTimer);
+      this.playTimer = null;
+    }
+    if (this.btnPlay) {
+      this.btnPlay.textContent = '▶';
+      this.btnPlay.title = 'Play trace';
+      this.btnPlay.setAttribute('aria-label', 'Play trace');
+    }
+  }
+
+  private setSpeed(speed: number): void {
+    this.playSpeed = speed;
+    this.root.querySelectorAll<HTMLButtonElement>('.step-speed-btn').forEach((btn) => {
+      const s = parseFloat(btn.dataset.speed ?? '1');
+      btn.classList.toggle('is-active', s === speed);
+    });
+    if (this.isPlaying) {
+      this.play(); // restart timer with new interval
+    }
+  }
+
+  private toggleScalars(): void {
+    this.showScalarsOnHeap = !this.showScalarsOnHeap;
+    this.updateScalarButton();
+    this.onToggleScalarsCb?.(this.showScalarsOnHeap);
+  }
+
+  private updateScalarButton(): void {
+    if (!this.scalarToggleBtn) return;
+    this.scalarToggleBtn.setAttribute('aria-pressed', String(this.showScalarsOnHeap));
+    this.scalarToggleBtn.textContent = this.showScalarsOnHeap
+      ? 'Showing all on heap'
+      : 'Inline scalars';
+    this.scalarToggleBtn.title = this.showScalarsOnHeap
+      ? 'Scalars are drawn as heap boxes with reference arrows (click to draw inline)'
+      : 'Scalars are drawn inline inside stack frames (click to show on heap)';
+  }
+
   private updateStepper(): void {
     if (!this.stepperBar) return;
     this.stepperBar.hidden = this.trace.length < 2;
     if (this.trace.length < 2) return;
     this.stepCounter.textContent = `${this.stepIndex + 1} / ${this.trace.length}`;
+    this.stepSlider.max = String(this.trace.length - 1);
+    this.stepSlider.value = String(this.stepIndex);
     this.btnFirst.disabled = this.stepIndex === 0;
     this.btnPrev.disabled = this.stepIndex === 0;
-    this.btnPlay.disabled = this.stepIndex >= this.trace.length - 1;
+    this.btnNext.disabled = this.stepIndex >= this.trace.length - 1;
     this.btnLast.disabled = this.stepIndex >= this.trace.length - 1;
+
+    // Accessibility announcement for screen readers
+    this.updateAccessibility();
+  }
+
+  /** Update accessible text alternatives and aria-live region. */
+  updateAccessibility(state?: MemoryState): void {
+    const currentState = state ?? this.trace[this.stepIndex];
+    if (!currentState || !this.liveRegion || !this.textAlt) return;
+
+    const frameLines = currentState.frames.map((f) => {
+      const vars = Object.entries(f.locals)
+        .map(([k, v]) => `${k} = ${v}`)
+        .join(', ');
+      return `Frame ${f.name}: ${vars || 'empty'}`;
+    });
+
+    const heapCount = Object.keys(currentState.heap).length;
+    const summary = `Step ${this.stepIndex + 1} of ${Math.max(1, this.trace.length)}. ${frameLines.join('. ')}. Heap has ${heapCount} object${heapCount === 1 ? '' : 's'}.`;
+
+    this.liveRegion.textContent = summary;
+    this.textAlt.textContent = summary;
   }
 
   private render(): void {
@@ -252,25 +380,39 @@ export class BoardView {
             <span class="tab-badge">addr · ref</span>
           </button>
         </div>
+        <button type="button" class="scalar-toggle-chip" id="scalar-toggle-btn" aria-pressed="${this.showScalarsOnHeap}">
+          ${this.showScalarsOnHeap ? 'Showing all on heap' : 'Inline scalars'}
+        </button>
       </div>
       <div class="board-body">
         <div class="board-pane${this.currentTab === 'memory' ? ' is-active' : ''}" data-pane="memory">
-          <div class="canvas-wrap"><svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg></div>
+          <div class="canvas-wrap">
+            <svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python memory visualization canvas"></svg>
+            <div class="sr-only live-desc" id="board-live-region" aria-live="polite"></div>
+            <div class="sr-only text-alternative" id="board-text-alt"></div>
+          </div>
         </div>
         <div class="board-pane${this.currentTab === 'plot' ? ' is-active' : ''}" data-pane="plot">
           <div class="plot-stage" id="plot-stage"></div>
         </div>
         <div class="board-pane${this.currentTab === 'ram' ? ' is-active' : ''}" data-pane="ram">
-          <div class="canvas-wrap"><svg id="ram-canvas" xmlns="http://www.w3.org/2000/svg"></svg></div>
+          <div class="canvas-wrap"><svg id="ram-canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python RAM byte layout view"></svg></div>
         </div>
       </div>
       <div class="step-bar" id="step-bar" hidden>
         <span class="step-label">step</span>
-        <button type="button" class="step-btn" data-step="first" aria-label="First step" title="First step">⏮</button>
-        <button type="button" class="step-btn" data-step="prev" aria-label="Previous step" title="Previous step">◀</button>
-        <button type="button" class="step-btn play" data-step="play" aria-label="Play one step" title="Play one step">▶</button>
-        <button type="button" class="step-btn" data-step="last" aria-label="Last step" title="Last step">⏭</button>
+        <button type="button" class="step-btn" data-step="first" aria-label="First step" title="First step (Home)">⏮</button>
+        <button type="button" class="step-btn" data-step="prev" aria-label="Previous step" title="Previous step (Left Arrow)">◀</button>
+        <button type="button" class="step-btn play" data-step="play" aria-label="Play trace" title="Play trace (Space)">▶</button>
+        <button type="button" class="step-btn" data-step="next" aria-label="Next step" title="Next step (Right Arrow)">▶|</button>
+        <button type="button" class="step-btn" data-step="last" aria-label="Last step" title="Last step (End)">⏭</button>
+        <input type="range" class="step-slider" id="step-slider" min="0" max="0" value="0" aria-label="Trace step scrubber" />
         <span class="step-count" id="step-count">1 / 1</span>
+        <div class="step-speed-group" role="group" aria-label="Playback speed">
+          <button type="button" class="step-speed-btn${this.playSpeed === 0.5 ? ' is-active' : ''}" data-speed="0.5">0.5x</button>
+          <button type="button" class="step-speed-btn${this.playSpeed === 1 ? ' is-active' : ''}" data-speed="1">1x</button>
+          <button type="button" class="step-speed-btn${this.playSpeed === 2 ? ' is-active' : ''}" data-speed="2">2x</button>
+        </div>
       </div>
     `;
 
@@ -282,19 +424,35 @@ export class BoardView {
     this.ramTabBtn = this.root.querySelector('[data-tab="ram"]') as HTMLButtonElement;
     this.stepperBar = this.root.querySelector('#step-bar')!;
     this.stepCounter = this.root.querySelector('#step-count')!;
+    this.stepSlider = this.root.querySelector('#step-slider') as HTMLInputElement;
     this.btnFirst = this.root.querySelector('[data-step="first"]') as HTMLButtonElement;
     this.btnPrev = this.root.querySelector('[data-step="prev"]') as HTMLButtonElement;
     this.btnPlay = this.root.querySelector('[data-step="play"]') as HTMLButtonElement;
+    this.btnNext = this.root.querySelector('[data-step="next"]') as HTMLButtonElement;
     this.btnLast = this.root.querySelector('[data-step="last"]') as HTMLButtonElement;
+    this.scalarToggleBtn = this.root.querySelector('#scalar-toggle-btn') as HTMLButtonElement;
+    this.liveRegion = this.root.querySelector('#board-live-region')!;
+    this.textAlt = this.root.querySelector('#board-text-alt')!;
 
     this.memoryTabBtn.addEventListener('click', () => this.setTab('memory'));
     this.plotTabBtn.addEventListener('click', () => this.setTab('plot'));
     this.ramTabBtn.addEventListener('click', () => this.setTab('ram'));
     this.btnFirst.addEventListener('click', () => this.stepFirst());
     this.btnPrev.addEventListener('click', () => this.stepPrev());
-    this.btnPlay.addEventListener('click', () => this.stepNext());
+    this.btnPlay.addEventListener('click', () => this.togglePlay());
+    this.btnNext.addEventListener('click', () => this.stepNext());
     this.btnLast.addEventListener('click', () => this.stepLast());
+    this.stepSlider.addEventListener('input', () => this.goToStep(this.stepSlider.valueAsNumber));
+    this.scalarToggleBtn.addEventListener('click', () => this.toggleScalars());
 
+    this.root.querySelectorAll<HTMLButtonElement>('.step-speed-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const speed = parseFloat(btn.dataset.speed ?? '1');
+        this.setSpeed(speed);
+      });
+    });
+
+    this.updateScalarButton();
     this.updateStepper();
     this.renderPlot();
   }
