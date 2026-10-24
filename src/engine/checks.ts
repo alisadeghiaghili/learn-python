@@ -543,7 +543,11 @@ function pandasBufferId(name: string, snapshot: Snapshot): string | null {
   if (typeof id !== 'string' || !snapshot.heap[id]) return null;
   const obj = snapshot.heap[id];
   if (obj.type !== 'series' && obj.type !== 'dataframe') return null;
-  const v = obj.value as { buffer?: unknown };
+  const v = obj.value as { buffer?: unknown; columnBuffers?: Record<string, string> };
+  if (v.columnBuffers && Object.values(v.columnBuffers).length > 0) {
+    const first = Object.values(v.columnBuffers)[0];
+    if (typeof first === 'string') return first;
+  }
   return typeof v.buffer === 'string' ? v.buffer : null;
 }
 
@@ -555,7 +559,11 @@ function ndarrayBufferId(name: string, snapshot: Snapshot): string | null {
   if (typeof id !== 'string' || !snapshot.heap[id]) return null;
   const obj = snapshot.heap[id];
   if (obj.type !== 'ndarray') return null;
-  const v = obj.value as { buffer?: unknown };
+  const v = obj.value as { buffer?: unknown; columnBuffers?: Record<string, string> };
+  if (v.columnBuffers && Object.values(v.columnBuffers).length > 0) {
+    const first = Object.values(v.columnBuffers)[0];
+    if (typeof first === 'string') return first;
+  }
   return typeof v.buffer === 'string' ? v.buffer : null;
 }
 

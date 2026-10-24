@@ -14,11 +14,15 @@ import {
   PyModuleNotFoundError,
   PyNameError,
   PyRecursionError,
+  PyRuntimeError,
+  PyStopIteration,
   PySyntaxError,
   PyTypeError,
   PyUnboundLocalError,
   PyValueError,
   PyZeroDivisionError,
+  PyReturn,
+  PySuspend,
   isExceptionInstanceOf,
 } from './errors';
 import {
@@ -41,6 +45,52 @@ import { callListMethod } from './methods/list';
 import { callDictMethod, dictKeyRepr } from './methods/dict';
 import { callSetMethod } from './methods/set';
 import { callStrMethod } from './methods/str';
+import {
+  NumpyBufferValue,
+  NdarrayValue,
+  ndarraySlice,
+  refreshNdarrayReprs,
+  vecBinaryOp,
+  vecInPlaceOp,
+  ndarrayGetAttr,
+  callNdarrayMethod,
+  callNumpyModule,
+} from './libs/numpy';
+import {
+  dataFrameIloc,
+  dataFrameSetLoc,
+  dataFrameLocRow,
+  dataFrameIlocRow,
+  dataFrameIlocSet,
+  dataFrameGetColumn,
+  dataFrameSetColumn,
+  refreshPandasReprs,
+  pandasGetAttr,
+  callPandasMethod,
+  callPandasModule,
+} from './libs/pandas';
+import {
+  getActiveCoroutineId,
+  makeCoroutine,
+  callAsyncioModule,
+} from './libs/asyncio';
+import {
+  ThreadValue,
+  threadStart,
+  threadJoin,
+  lockAcquire,
+  lockRelease,
+  refreshThreadReprs,
+  setActiveThreadId,
+  callThreadingModule,
+} from './libs/threading';
+import {
+  pltScatter,
+  pltPlot,
+  pltShow,
+  resetMatplotlib,
+  callMatplotlibModule,
+} from './libs/matplotlib';
 import type {
   AstNode,
   Frame,
@@ -57,6 +107,7 @@ import type {
  */
 export function run(source: string, state: MemoryState): MemoryState {
   try {
+    resetMatplotlib();
     if (traceEnabled) state.trace = [cloneState(state)]; // frame 0: state before running
     const ast = parse(source);
     for (const stmt of ast) {
@@ -76,6 +127,7 @@ export function run(source: string, state: MemoryState): MemoryState {
     // leaving a parent container's cached repr stale. Recompute container
     // reprs so display, print, and goal checks all see the current value.
     refreshReprs(state);
+    pltShow(state);
     // Recompute the refcount column for the RAM view from the now-final graph.
     computeRefCounts(state);
   } catch (err) {
@@ -99,22 +151,9 @@ function refreshReprs(state: MemoryState): void {
     if (obj.type === 'list' || obj.type === 'dict' || obj.type === 'tuple' || obj.type === 'set' || obj.type === 'defaultdict') {
       obj.repr = formatObject(obj, state);
     }
-    if (obj.type === 'ndarray') {
-      obj.repr = numpyRepr(ndarrayWindow(obj.id, state), (obj.value as NdarrayValue).dtype);
-    }
   }
-}
-
-/**
- * Recompute the cached repr of every ndarray window AND its buffer after a
- * buffer write, so a mutation through one window is visible through every
- * other window (the whole point of a view).
- */
-function refreshNdarrayReprs(state: MemoryState): void {
-  for (const obj of Object.values(state.heap)) {
-    if (obj.type === 'ndarray') obj.repr = numpyRepr(ndarrayWindow(obj.id, state), (obj.value as NdarrayValue).dtype);
-    if (obj.type === 'buffer') obj.repr = `[${(obj.value as NumpyBufferValue).data.join(', ')}]`;
-  }
+  refreshNdarrayReprs(state);
+  refreshPandasReprs(state);
 }
 
 /**
@@ -200,8 +239,15 @@ const KNOWN_MODULES = new Set([
   'pandas',
   'pd',
   'asyncio',
+  'a',
   'threading',
+  't',
   'time',
+  'matplotlib',
+  'matplotlib.pyplot',
+  'plt',
+  'queue',
+  'io',
   'json',
   'sys',
   'typing',
@@ -357,14 +403,21 @@ function execStatement(node: AstNode, state: MemoryState): void {
             obj.repr = formatObject(obj, state);
             return;
           }
-          if (op === '+' && obj.type === 'ndarray') {
-            vecAddInPlace(current, rhs, state, node.line);
+          if (['+', '-', '*', '/'].includes(op) && obj.type === 'ndarray') {
+            vecInPlaceOp(current, node.op, rhs, state, node.line);
             return;
           }
         }
         const combined = binOp(op, current, rhs, state, node.line);
         bindTarget(target, combined, state);
         return;
+      }
+      if (target.kind === 'Subscript' || target.kind === 'Slice') {
+        const objVal = evalExpr(target.object, state);
+        if (typeof objVal === 'string' && state.heap[objVal]?.type === 'ndarray') {
+          vecInPlaceOp(objVal, node.op, rhs, state, node.line);
+          return;
+        }
       }
       const current = readTarget(target, state);
       const combined = binOp(op, current, rhs, state, node.line);
@@ -591,6 +644,27 @@ function execStatement(node: AstNode, state: MemoryState): void {
       throw new PyBreak();
     case 'Continue':
       throw new PyContinue();
+    case 'With': {
+      const lockIds: string[] = [];
+      try {
+        for (const item of node.items) {
+          const ctxVal = evalExpr(item.contextExpr, state);
+          if (typeof ctxVal === 'string' && state.heap[ctxVal]?.type === 'lock') {
+            lockAcquire(ctxVal, state, node.line);
+            lockIds.push(ctxVal);
+            if (item.optionalVars && item.optionalVars.kind === 'Name') {
+              setFrameLocal(currentFrame(state), item.optionalVars.id, ctxVal);
+            }
+          }
+        }
+        execBody(node.body, state);
+      } finally {
+        for (let i = lockIds.length - 1; i >= 0; i--) {
+          lockRelease(lockIds[i]!, state, node.line);
+        }
+      }
+      return;
+    }
     case 'Pass':
     case 'Global':
     case 'Nonlocal':
@@ -600,32 +674,8 @@ function execStatement(node: AstNode, state: MemoryState): void {
   }
 }
 
-class PyReturn extends Error {
-  value: RtValue;
-  constructor(value: RtValue) {
-    super('return');
-    this.value = value;
-  }
-}
 
-/**
- * Raised by `await a.sleep(...)` inside a coroutine to hand the tick back to the
- * event loop (a cooperative-yield suspension point). The coroutine executor
- * catches it, saves the suspended state, and resumes on the next tick.
- */
-class PySuspend extends Error {
-  constructor() {
-    super('suspend');
-  }
-}
 
-/**
- * The id of the coroutine currently being stepped by the event loop, or null.
- * Lets `evalExpr` on an `Await` know whether a suspension is in force (inside a
- * coroutine) or a plain no-op (a bare `await` outside a running task). The
- * engine is single-threaded, so a module pointer is safe.
- */
-let activeCoroutineId: string | null = null;
 
 function currentFrame(state: MemoryState): Frame {
   return state.frames[state.frames.length - 1];
@@ -715,12 +765,28 @@ function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
     if (!obj) throw new PyTypeError(`cannot subscript immutable value (line ${target.line})`);
     const line = target.line;
 
+    if (target.attr === 'loc') {
+      let rowKey: RtValue = index;
+      let colKey = '';
+      if (typeof index === 'string' && state.heap[index]?.type === 'tuple') {
+        const tupleElts = state.heap[index].value as RtValue[];
+        rowKey = tupleElts[0]!;
+        colKey = typeof tupleElts[1] === 'string' && state.heap[tupleElts[1]]?.type === 'str'
+          ? (state.heap[tupleElts[1]].value as string)
+          : String(tupleElts[1]);
+      } else if (Array.isArray(index)) {
+        rowKey = index[0]!;
+        colKey = String(index[1]);
+      }
+      dataFrameSetLoc(objId as string, rowKey, colKey, value, state, line);
+      return;
+    }
     if (target.attr === 'iloc') {
-      frameIlocSet(objId as string, index as RtValue, value, state, line);
+      dataFrameIlocSet(objId as string, index as RtValue, value, state, line);
       return;
     }
     if (obj.type === 'dataframe') {
-      frameSetColumn(objId as string, index as RtValue, value, state, line);
+      dataFrameSetColumn(objId as string, index as RtValue, value, state, line);
       return;
     }
     if (obj.type === 'list') {
@@ -754,6 +820,22 @@ function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
       return;
     }
     throw new PyTypeError(`'${obj.type}' object does not support item assignment (line ${line})`);
+  }
+  if (target.kind === 'Slice') {
+    const objId = evalExpr(target.object, state);
+    const obj = state.heap[objId as string];
+    if (obj && obj.type === 'ndarray') {
+      const v = obj.value as NdarrayValue;
+      const s = target.start ? Number(evalExpr(target.start, state)) : 0;
+      const e = target.stop ? Number(evalExpr(target.stop, state)) : (typeof v.shape === 'number' ? v.shape : v.shape[0]!);
+      const bufData = (state.heap[v.buffer].value as NumpyBufferValue).data;
+      const numVal = Number(value);
+      for (let i = s; i < e; i++) {
+        bufData[v.offset + i] = numVal;
+      }
+      refreshNdarrayReprs(state);
+      return;
+    }
   }
   throw new PySyntaxError(`cannot assign to ${target.kind}`);
 }
@@ -871,16 +953,17 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
     case 'Subscript': {
       const objId = evalExpr(node.object, state);
       const index = evalExpr(node.index!, state);
-      if (node.attr === 'loc') return frameLocRow(objId as string, index, state, node.line);
-      if (node.attr === 'iloc') return frameIlocRow(objId as string, index, state, node.line);
+      if (node.attr === 'loc') return dataFrameLocRow(objId as string, index, state, node.line);
+      if (node.attr === 'iloc') return dataFrameIlocRow(objId as string, index, state, node.line);
       return subscriptGet(objId, index, state, node.line);
     }
     case 'Slice': {
       const objId = evalExpr(node.object, state);
       const start = node.start ? evalExpr(node.start, state) : null;
       const stop = node.stop ? evalExpr(node.stop, state) : null;
-      if (node.attr === 'iloc') return frameIlocSlice(objId as string, start, stop, state, node.line);
-      return sliceGet(objId, start, stop, state, node.line);
+      const step = node.step ? evalExpr(node.step, state) : null;
+      if (node.attr === 'iloc') return dataFrameIloc(objId as string, start, stop, state, node.line);
+      return sliceGet(objId, start, stop, step, state, node.line);
     }
     case 'Attribute': {
       const objVal = evalExpr(node.object, state);
@@ -889,6 +972,12 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
       }
       if (typeof objVal === 'string' && state.heap[objVal]) {
         const obj = state.heap[objVal];
+        if (obj.type === 'ndarray') {
+          return ndarrayGetAttr(objVal, node.attr, state, node.line);
+        }
+        if (obj.type === 'dataframe' || obj.type === 'series') {
+          return pandasGetAttr(objVal, node.attr, state, node.line);
+        }
         if (obj.type === 'type') {
           if (node.attr === '__name__') {
             return (obj.value as { name: string }).name;
@@ -919,7 +1008,7 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
       // `await a.sleep(...)` inside a running coroutine is a suspension point:
       // it hands the tick back to the event loop (a cooperative yield). Outside a
       // running coroutine it is a no-op that just evaluates its operand.
-      if (activeCoroutineId) {
+      if (getActiveCoroutineId()) {
         throw new PySuspend();
       }
       return evalExpr(node.value, state);
@@ -934,9 +1023,21 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
  */
 function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState): RtValue {
   const args = node.args.map((a) => evalExpr(a, state));
+  const kwargs: Record<string, RtValue> = {};
+  if (node.keywords) {
+    for (const kw of node.keywords) {
+      kwargs[kw.arg] = evalExpr(kw.value, state);
+    }
+  }
 
   if (node.func.kind === 'Name') {
     const name = node.func.id;
+    if (name === 'scatter') {
+      return pltScatter(args, state, node.line, true);
+    }
+    if (name === 'line') {
+      return pltPlot(args, state, node.line, true);
+    }
     if (name === 'print') {
       const parts = args.map((a) => printArg(a, state));
       state.stdout.push(parts.join(' '));
@@ -1065,17 +1166,8 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
       obj.repr = formatObject(obj, state);
       return obj.id;
     }
-    if (name === 'scatter' || name === 'line') {
-      // Title is a display label, so use the unquoted (print-style) value,
-      // not the repr form with surrounding quotes.
-      const title = args.length >= 3 ? printArg(args[2], state) : name;
-      const points = zipPoints(args[0], args[1], state);
-      state.plots.push({ kind: name, title, points });
-      return null;
-    }
-
     const fnId = lookupName(name, state, node.line);
-    return callUserFunction(fnId, args, state, node.line);
+    return callUserFunction(fnId, args, state, node.line, kwargs);
   }
 
   if (node.func.kind === 'Attribute') {
@@ -1101,17 +1193,23 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
         throw new PyAttributeError(`module 'math' has no attribute '${method}' (line ${node.line})`);
       }
     }
-    return callMethod(objVal, method, args, state, node.line);
+    return callMethod(objVal, method, args, state, node.line, kwargs);
   }
 
   const fnVal = evalExpr(node.func, state);
-  return callUserFunction(fnVal, args, state, node.line);
+  return callUserFunction(fnVal, args, state, node.line, kwargs);
 }
 
 /**
  * Call a user-defined function (heap function object).
  */
-function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, line: number): RtValue {
+function callUserFunction(
+  fnId: RtValue,
+  args: RtValue[],
+  state: MemoryState,
+  line: number,
+  kwargs?: Record<string, RtValue>
+): RtValue {
   if (state.frames.length >= 100) {
     throw new PyRecursionError(`maximum recursion depth exceeded (line ${line})`);
   }
@@ -1151,6 +1249,8 @@ function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, li
     const p = params[i]!;
     if (i < args.length) {
       frame.locals[p] = args[i]!;
+    } else if (kwargs && p in kwargs) {
+      frame.locals[p] = kwargs[p]!;
     } else if (paramDefaults && p in paramDefaults) {
       frame.locals[p] = paramDefaults[p]!;
     } else {
@@ -1165,7 +1265,7 @@ function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, li
     }
   } catch (err) {
     if (err instanceof PyReturn) {
-      return err.value;
+      return err.value as RtValue;
     }
     throw err;
   } finally {
@@ -1177,80 +1277,79 @@ function callUserFunction(fnId: RtValue, args: RtValue[], state: MemoryState, li
 /**
  * Dispatch a method on a heap object.
  */
-function callMethod(objId: RtValue, method: string, args: RtValue[], state: MemoryState, line: number): RtValue {
+function callMethod(
+  objId: RtValue,
+  method: string,
+  args: RtValue[],
+  state: MemoryState,
+  line: number,
+  kwargs?: Record<string, RtValue>
+): RtValue {
   const obj = state.heap[objId as string];
-  if (!obj) throw new Error(`TypeError: bad method target (line ${line})`);
+  if (!obj) throw new PyAttributeError(`bad method target (line ${line})`);
 
-  if (obj.type === 'module' && (obj.value as { name: string }).name === 'collections') {
-    if (method === 'defaultdict') return makeDefaultdict(args, state, line);
-    throw new Error(`AttributeError: module 'collections' has no attribute '${method}' (line ${line})`);
-  }
-
-  if (obj.type === 'module' && (obj.value as { name: string }).name === 'functools') {
-    if (method === 'reduce') return reduce(args, state, line);
-    throw new Error(`AttributeError: module 'functools' has no attribute '${method}' (line ${line})`);
-  }
-
-  if (obj.type === 'module' && (obj.value as { name: string }).name === 'copy') {
-    if (args.length !== 1) throw new Error(`TypeError: copy() takes exactly one argument (line ${line})`);
-    if (method === 'copy') return shallowClone(args[0], state, line);
-    if (method === 'deepcopy') return deepClone(args[0], state, line);
-    throw new Error(`AttributeError: module 'copy' has no attribute '${method}' (line ${line})`);
-  }
-
-  if (obj.type === 'module' && (obj.value as { name: string }).name === 'numpy') {
-    if (method === 'array') return makeNdarray(args, state, line);
-    throw new Error(`AttributeError: module 'numpy' has no attribute '${method}' (line ${line})`);
-  }
-
-  if (obj.type === 'module' && (obj.value as { name: string }).name === 'pandas') {
-    if (method === 'Series') return makeSeries(args, state, line);
-    if (method === 'DataFrame') return makeDataFrame(args, state, line);
-    if (method === 'read_csv') return readCsv(args, state, line);
-    throw new Error(`AttributeError: module 'pandas' has no attribute '${method}' (line ${line})`);
-  }
-
-  if (obj.type === 'module' && (obj.value as { name: string }).name === 'asyncio') {
-    if (method === 'create_task') return makeTask(args, state, line);
-    if (method === 'gather') return gather(args, state, line);
-    if (method === 'sleep') return asyncSleep(args, state, line);
-    if (method === 'run') {
-      runEventLoop(args, state, line);
-      return null;
+  if (obj.type === 'module') {
+    const modName = (obj.value as { name: string }).name;
+    if (modName === 'numpy' || modName === 'np') {
+      return callNumpyModule(method, args, kwargs, state, line);
     }
-    throw new Error(`AttributeError: module 'asyncio' has no attribute '${method}' (line ${line})`);
-  }
-
-  if (obj.type === 'module' && (obj.value as { name: string }).name === 'threading') {
-    if (method === 'Thread') return makeThread(args, state, line);
-    if (method === 'Lock') return makeLock(state, line);
-    throw new Error(`AttributeError: module 'threading' has no attribute '${method}' (line ${line})`);
+    if (modName === 'pandas' || modName === 'pd') {
+      return callPandasModule(method, args, kwargs, state, line);
+    }
+    if (modName === 'asyncio' || modName === 'a') {
+      return callAsyncioModule(method, args, state, line, typeName, execStatement);
+    }
+    if (modName === 'threading' || modName === 't') {
+      return callThreadingModule(method, args, kwargs, state, line, typeName);
+    }
+    if (modName === 'matplotlib' || modName === 'matplotlib.pyplot' || modName === 'plt') {
+      return callMatplotlibModule(method, args, state, line);
+    }
+    if (modName === 'time') {
+      if (method === 'sleep') return null;
+      throw new PyAttributeError(`module 'time' has no attribute '${method}' (line ${line})`);
+    }
+    if (modName === 'collections') {
+      if (method === 'defaultdict') return makeDefaultdict(args, state, line);
+      throw new PyAttributeError(`module 'collections' has no attribute '${method}' (line ${line})`);
+    }
+    if (modName === 'functools') {
+      if (method === 'reduce') return reduce(args, state, line);
+      throw new PyAttributeError(`module 'functools' has no attribute '${method}' (line ${line})`);
+    }
+    if (modName === 'copy') {
+      if (args.length !== 1) throw new PyTypeError(`copy() takes exactly one argument (line ${line})`);
+      if (method === 'copy') return shallowClone(args[0], state, line);
+      if (method === 'deepcopy') return deepClone(args[0], state, line);
+      throw new PyAttributeError(`module 'copy' has no attribute '${method}' (line ${line})`);
+    }
+    throw new PyAttributeError(`module '${modName}' has no attribute '${method}' (line ${line})`);
   }
 
   if (obj.type === 'thread') {
-    if (method === 'start') { threadStart(objId as string, state, line); return null; }
-    if (method === 'join') { threadJoin(objId as string, state, line); return null; }
-    throw new Error(`AttributeError: 'thread' object has no attribute '${method}' (line ${line})`);
+    if (method === 'start') {
+      threadStart(objId as string, state, line);
+      return null;
+    }
+    if (method === 'join') {
+      threadJoin(objId as string, state, line, stepThread);
+      return null;
+    }
+    throw new PyAttributeError(`'thread' object has no attribute '${method}' (line ${line})`);
   }
 
   if (obj.type === 'lock') {
     if (method === 'acquire') return lockAcquire(objId as string, state, line);
     if (method === 'release') return lockRelease(objId as string, state, line);
-    throw new Error(`AttributeError: 'lock' object has no attribute '${method}' (line ${line})`);
+    throw new PyAttributeError(`'lock' object has no attribute '${method}' (line ${line})`);
   }
 
   if (obj.type === 'ndarray') {
-    if (method === 'copy') return copyNdarray(objId as string, state, line);
-    if (method === 'sum') return ndarraySum(objId as string, state, line);
-    throw new Error(`AttributeError: 'ndarray' object has no attribute '${method}' (line ${line})`);
+    return callNdarrayMethod(objId as string, method, args, state, line);
   }
 
   if (obj.type === 'series' || obj.type === 'dataframe') {
-    // .loc / .iloc are not called — they are subscripts handled by bindTarget
-    // and evalExpr (subscriptGet). Only callable methods land here.
-    if (method === 'copy') return frameCopy(objId as string, state, line);
-    if (method === 'sum') return frameSum(objId as string, state, line);
-    throw new Error(`AttributeError: '${obj.type}' object has no attribute '${method}' (line ${line})`);
+    return callPandasMethod(objId as string, method, args, kwargs, state, line);
   }
 
   if (obj.type === 'list') {
@@ -1270,6 +1369,48 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
   }
 
   throw new PyAttributeError(`'${obj.type}' object has no attribute '${method}' (line ${line})`);
+}
+
+/**
+ * Step one thread by exactly ONE statement, updating thread status and frames.
+ */
+function stepThread(threadId: string, state: MemoryState): void {
+  const th = state.heap[threadId]?.value as ThreadValue | undefined;
+  if (!th || th.pc >= th.body.length) {
+    if (th) th.status = 'done';
+    return;
+  }
+  const frame: Frame = { name: `thread:${th.name}`, locals: {} };
+  for (const [k, v] of Object.entries(th.locals)) frame.locals[k] = v as RtValue;
+  state.frames.push(frame);
+  setActiveThreadId(threadId);
+  try {
+    try {
+      execStatement(th.body[th.pc]!, state);
+    } catch (err) {
+      if (err instanceof PySuspend) {
+        th.blocked = true;
+        th.status = 'blocked';
+        return;
+      }
+      if (err && typeof err === 'object' && 'name' in err && (err as any).name === 'PyReturn') {
+        th.returnValue = (err as any).value;
+        th.pc = th.body.length;
+        th.status = 'done';
+        return;
+      }
+      throw err;
+    }
+    th.pc += 1;
+    if (th.pc >= th.body.length) th.status = 'done';
+  } finally {
+    for (const [k, v] of Object.entries(frame.locals)) th.locals[k] = v;
+    state.frames.pop();
+    setActiveThreadId(null);
+    refreshThreadReprs(state);
+    refreshReprs(state);
+    pltShow(state);
+  }
 }
 
 /**
@@ -1369,7 +1510,7 @@ function makeIterator(v: RtValue, state: MemoryState, line: number): RtValue {
 /** `next(it)` → advance the cursor one step and return the element. */
 function nextIterator(v: RtValue, state: MemoryState, line: number): RtValue {
   if (typeof v !== 'string' || !state.heap[v] || !isIteratorType(state.heap[v].type)) {
-    throw new Error(`TypeError: argument of type '${typeName(v, state)}' is not an iterator (line ${line})`);
+    throw new PyTypeError(`argument of type '${typeName(v, state)}' is not an iterator (line ${line})`);
   }
   const obj = state.heap[v];
   // map/filter iterators delegate to their source and apply the function.
@@ -1378,10 +1519,10 @@ function nextIterator(v: RtValue, state: MemoryState, line: number): RtValue {
   }
   const itv = obj.value as IteratorValue;
   const src = state.heap[itv.source];
-  if (!src) throw new Error(`RuntimeError: iterator source was released (line ${line})`);
+  if (!src) throw new PyRuntimeError(`iterator source was released (line ${line})`);
   const len = src.type === 'str' ? (src.value as string).length : (src.value as RtValue[]).length;
   if (itv.index >= len) {
-    throw new Error(`StopIteration (line ${line})`);
+    throw new PyStopIteration();
   }
   const elem = src.type === 'str'
     ? allocString((src.value as string)[itv.index]!, state)
@@ -1573,1126 +1714,12 @@ function reduce(args: RtValue[], state: MemoryState, line: number): RtValue {
   }
 }
 
-/**
- * A numpy buffer's payload: a flat run of numbers. Rendered as a separate
- * box on the canvas so a view-vs-copy distinction becomes visible — the
- * ndarray points at a buffer, and a copy mints a *second* buffer.
- */
-interface NumpyBufferValue {
-  data: number[];
-  dtype: string;
-}
+/* ————————————————— libraries (numpy, pandas, asyncio, threading, matplotlib) are in ./libs/ ————————————————— */
 
-/**
- * An ndarray's payload: a *window* onto a buffer. `buffer` is the id of the
- * heap buffer box; `offset` + `shape` carve the view's slice out of that
- * buffer's flat run. `view` is true when this window is not the buffer's full
- * extent (i.e. it is a slice) and false when it owns its own full buffer.
- */
-interface NdarrayValue {
-  buffer: string;
-  offset: number;
-  shape: number;
-  dtype: string;
-  view: boolean;
-}
 
-/** numpy-style repr of a number run. Right-pads integers; adds trailing dot to floats. */
-function numpyRepr(data: number[], dtype: string = 'float64'): string {
-  if (dtype === 'int64' || dtype === 'int32') {
-    const strs = data.map(String);
-    const maxLen = Math.max(...strs.map((s) => s.length), 1);
-    const padded = strs.map((s) => s.padStart(maxLen, ' '));
-    return `[${padded.join(' ')}]`;
-  }
-  const body = data.map((n) => (Number.isInteger(n) ? `${n}.` : String(n)));
-  return `[${body.join(' ')}]`;
-}
 
-/** The numeric window an ndarray currently shows (offset+shape over buffer). */
-function ndarrayWindow(ndId: string, state: MemoryState): number[] {
-  const v = state.heap[ndId].value as NdarrayValue;
-  const data = (state.heap[v.buffer].value as NumpyBufferValue).data;
-  return data.slice(v.offset, v.offset + v.shape);
-}
 
-/** Allocate a buffer object holding a flat numeric run. */
-function makeBuffer(data: number[], dtype: string, state: MemoryState): string {
-  const obj = allocObject('buffer', { data, dtype } as NumpyBufferValue, `[${data.join(', ')}]`);
-  state.heap[obj.id] = obj;
-  return obj.id;
-}
 
-/**
- * `np.array([...])` → a fresh buffer + an ndarray that owns its full buffer.
- */
-function makeNdarray(args: RtValue[], state: MemoryState, line: number): RtValue {
-  if (args.length !== 1) throw new PyTypeError(`array() takes exactly one argument (line ${line})`);
-  const data = readNumberSeries(args[0], state);
-  const listObj = typeof args[0] === 'string' ? state.heap[args[0]] : null;
-  const hasFloat =
-    listObj &&
-    Array.isArray(listObj.value) &&
-    (listObj.value as RtValue[]).some(
-      (e) => typeof e === 'string' && state.heap[e]?.type === 'float'
-    );
-  const dtype = hasFloat ? 'float64' : 'int64';
-  const bufId = makeBuffer(data, dtype, state);
-  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype, view: false } as NdarrayValue, '');
-  state.heap[obj.id] = obj;
-  obj.repr = numpyRepr(data, dtype);
-  return obj.id;
-}
-
-/**
- * `a.copy()` → a new buffer holding the array's current window. The new
- * buffer is fully independent: mutating one is invisible to the other.
- */
-function copyNdarray(ndId: string, state: MemoryState, line: number): RtValue {
-  const nd = state.heap[ndId];
-  if (!nd || nd.type !== 'ndarray') throw new PyTypeError(`${typeName(ndId, state)} has no .copy() (line ${line})`);
-  const data = ndarrayWindow(ndId, state);
-  const dtype = (nd.value as NdarrayValue).dtype;
-  const bufId = makeBuffer([...data], dtype, state);
-  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype, view: false } as NdarrayValue, '');
-  state.heap[obj.id] = obj;
-  obj.repr = numpyRepr(data, dtype);
-  return obj.id;
-}
-
-/**
- * `a[start:stop]` → a *view*: a new ndarray window onto the SAME buffer. This
- * is the flagship identity idea — slicing does not copy the data, it makes a
- * second window onto it. Writing through the view edits the shared buffer.
- */
-function ndarraySlice(ndId: string, start: RtValue, stop: RtValue, state: MemoryState, line: number): RtValue {
-  const nd = state.heap[ndId];
-  if (!nd || nd.type !== 'ndarray') throw new PyTypeError(`${typeName(ndId, state)} is not sliceable (line ${line})`);
-  const v = nd.value as NdarrayValue;
-  const full = (state.heap[v.buffer].value as NumpyBufferValue).data;
-  const s = start === null ? 0 : Number(start);
-  const e = stop === null ? v.shape : Number(stop);
-  const offset = v.offset + s;
-  const shape = Math.max(0, e - s);
-  const obj = allocObject('ndarray', { buffer: v.buffer, offset, shape, dtype: v.dtype, view: true } as NdarrayValue, '');
-  state.heap[obj.id] = obj;
-  obj.repr = numpyRepr(full.slice(offset, offset + shape), v.dtype);
-  void line;
-  return obj.id;
-}
-
-/**
- * In-place vector addition for `+=`. Writes directly through the window to the shared buffer.
- */
-function vecAddInPlace(ndId: string, right: RtValue, state: MemoryState, line: number): void {
-  const a = state.heap[ndId];
-  if (!a || a.type !== 'ndarray') throw new PyTypeError(`unsupported operand for += (line ${line})`);
-  const b = Number(right);
-  if (Number.isNaN(b)) throw new PyTypeError(`cannot add ${typeName(right, state)} to ndarray (line ${line})`);
-  const v = a.value as NdarrayValue;
-  const buffer = state.heap[v.buffer];
-  const bufData = (buffer.value as NumpyBufferValue).data;
-  for (let i = 0; i < v.shape; i++) {
-    bufData[v.offset + i] += b;
-  }
-  refreshNdarrayReprs(state);
-}
-
-/**
- * `a + scalar` (vectorized) → a brand-new buffer holding the element-wise
- * result. The operand is read; a new buffer is minted for the result.
- */
-function vecAdd(left: RtValue, right: RtValue, state: MemoryState, line: number): RtValue {
-  const a = state.heap[left as string];
-  if (!a || a.type !== 'ndarray') throw new PyTypeError(`unsupported operand (line ${line})`);
-  const b = Number(right);
-  if (Number.isNaN(b)) throw new PyTypeError(`cannot add ${typeName(right, state)} to ndarray (line ${line})`);
-  const dtype = (a.value as NdarrayValue).dtype;
-  const data = ndarrayWindow(left as string, state).map((n) => n + b);
-  const bufId = makeBuffer(data, dtype, state);
-  const obj = allocObject('ndarray', { buffer: bufId, offset: 0, shape: data.length, dtype, view: false } as NdarrayValue, '');
-  state.heap[obj.id] = obj;
-  obj.repr = numpyRepr(data, dtype);
-  return obj.id;
-}
-
-/** `a.sum()` → fold the array's window into a scalar. */
-function ndarraySum(ndId: string, state: MemoryState, line: number): RtValue {
-  const nd = state.heap[ndId];
-  if (!nd || nd.type !== 'ndarray') throw new Error(`TypeError: ${typeName(ndId, state)} has no .sum() (line ${line})`);
-  return ndarrayWindow(ndId, state).reduce((acc, n) => acc + n, 0);
-}
-
-/* ————————————————— asyncio (concurrency exemplar) —————————————————
- *
- * A coroutine is an object that holds a function's state across `await` points;
- * a Task is a named handle to one; the event loop is a tick-based scheduler that
- * round-robins ready tasks — each tick advances one task to its next `await`,
- * then moves on. There is no real loop or wall clock (the fidelity boundary):
- * the *schedule* is simulated so two coroutines visibly interleave.
- */
-
-type AsyncStatus = 'pending' | 'ready' | 'suspended' | 'done';
-
-interface CoroutineValue {
-  fn: string;
-  status: AsyncStatus;
-  pc: number;
-  name: string;
-  params: string[];
-  body: AstNode[];
-  locals: Record<string, unknown>;
-  returnValue: RtValue;
-}
-
-interface TaskValue {
-  coro: string;
-  name: string;
-  status: AsyncStatus;
-}
-
-interface EventLoopValue {
-  running: boolean;
-  ready: string[];
-  done: string[];
-  tick: number;
-}
-
-function asyncRepr(type: string, v: unknown, state: MemoryState): string {
-  if (type === 'coroutine') {
-    const c = v as CoroutineValue;
-    return `coro ${c.name}() · ${c.status}`;
-  }
-  if (type === 'task') {
-    const t = v as TaskValue;
-    return `Task(${t.name}) · ${t.status}`;
-  }
-  const l = v as EventLoopValue;
-  const readyNames = l.ready.map((id) => (state.heap[id]?.value as TaskValue | undefined)?.name ?? '?').join(', ');
-  const doneNames = l.done.map((id) => (state.heap[id]?.value as TaskValue | undefined)?.name ?? '?').join(', ');
-  return `EventLoop · tick ${l.tick} · running ${l.running ? 'True' : 'False'} · [ready ${readyNames || '∅'} | done ${doneNames || '∅'}]`;
-}
-
-/**
- * Bind a coroutine function's call to a *suspended* coroutine object. Its
- * `locals` are seeded with the parameters; `pc` starts at 0 and the body has not
- * yet run — it only runs when the event loop ticks it.
- */
-function makeCoroutine(
-  name: string,
-  params: string[],
-  body: AstNode[],
-  args: RtValue[],
-  fnId: string,
-  state: MemoryState,
-): string {
-  const locals: Record<string, unknown> = {};
-  params.forEach((p, i) => (locals[p] = args[i]));
-  const v: CoroutineValue = {
-    fn: fnId,
-    status: 'pending',
-    pc: 0,
-    name,
-    params: [...params],
-    body,
-    locals,
-    returnValue: null,
-  };
-  const obj = allocObject('coroutine', v, asyncRepr('coroutine', v, state));
-  state.heap[obj.id] = obj;
-  return obj.id;
-}
-
-/** `a.create_task(coro)` → a Task wrapping the given coroutine (initially ready). */
-function makeTask(args: RtValue[], state: MemoryState, line: number): RtValue {
-  if (args.length !== 1) throw new Error(`TypeError: create_task() takes one argument (a coroutine) (line ${line})`);
-  const coroId = args[0];
-  if (typeof coroId !== 'string' || state.heap[coroId]?.type !== 'coroutine') {
-    throw new Error(`TypeError: create_task() takes a coroutine, got ${typeName(coroId, state)} (line ${line})`);
-  }
-  const coro = state.heap[coroId].value as CoroutineValue;
-  const v: TaskValue = { coro: coroId, name: coro.name, status: coro.status === 'done' ? 'done' : 'ready' };
-  const obj = allocObject('task', v, asyncRepr('task', v, state));
-  state.heap[obj.id] = obj;
-  return obj.id;
-}
-
-/** `a.sleep(secs)` → a no-op builtin; the waiting is the surrounding `await`. */
-function asyncSleep(args: RtValue[], state: MemoryState, line: number): RtValue {
-  void state; // sleep is a no-op builtin — the waiting is the surrounding `await`
-  if (args.length !== 1) throw new Error(`TypeError: sleep() takes one argument (line ${line})`);
-  const secs = Number(args[0]);
-  if (Number.isNaN(secs)) throw new Error(`TypeError: sleep() takes a number (line ${line})`);
-  return null;
-}
-
-/** `a.gather(t1, t2, ...)` → a list of the task results (eager, for display). */
-function gather(args: RtValue[], state: MemoryState, line: number): RtValue {
-  if (args.length < 1) throw new Error(`TypeError: gather() takes at least one awaitable (line ${line})`);
-  const results: RtValue[] = args.map((a) => taskReturnValue(a, state, line));
-  const obj = allocObject('list', results, '');
-  state.heap[obj.id] = obj;
-  obj.repr = formatObject(obj, state);
-  return obj.id;
-}
-
-/** The value a finished task's coroutine returned (None if not done yet). */
-function taskReturnValue(v: RtValue, state: MemoryState, line: number): RtValue {
-  if (typeof v !== 'string' || state.heap[v]?.type !== 'task') {
-    throw new Error(`TypeError: gather() takes tasks, got ${typeName(v, state)} (line ${line})`);
-  }
-  const t = state.heap[v].value as TaskValue;
-  const coro = state.heap[t.coro];
-  if (!coro || coro.type !== 'coroutine') throw new Error(`RuntimeError: task coroutine was released (line ${line})`);
-  const cv = coro.value as CoroutineValue;
-  return cv.status === 'done' ? cv.returnValue : null;
-}
-
-/**
- * Advance one coroutine by exactly one tick: run statements from its `pc` until
- * it suspends on a cooperative `await` (handing the tick back to the loop) or it
- * returns. The suspended frame's locals are saved back onto the coroutine object
- * so the next tick resumes where it left off — a coroutine is a function that
- * remembers its place.
- */
-function stepCoroutine(state: MemoryState): void {
-  const coroId = activeCoroutineId!;
-  const c = state.heap[coroId].value as CoroutineValue;
-  const frame: Frame = { name: c.name, locals: {} };
-  for (const [k, v] of Object.entries(c.locals)) frame.locals[k] = v as RtValue;
-  state.frames.push(frame);
-  try {
-    while (c.pc < c.body.length) {
-      try {
-        execStatement(c.body[c.pc]!, state);
-      } catch (err) {
-        if (err instanceof PySuspend) {
-          // Cooperative yield: move past the `await` statement so the next tick
-          // resumes after it, not by re-running it.
-          c.pc += 1;
-          c.status = 'suspended';
-          return;
-        }
-        if (err instanceof PyReturn) {
-          c.returnValue = err.value;
-          c.pc = c.body.length;
-          c.status = 'done';
-          return;
-        }
-        throw err;
-      }
-      c.pc += 1;
-    }
-    c.returnValue = null;
-    c.status = 'done';
-  } finally {
-    for (const [k, v] of Object.entries(frame.locals)) c.locals[k] = v;
-    state.frames.pop();
-    refreshAsyncReprs(state);
-  }
-}
-
-/** Recompute the repr of every async object (status / queue change each tick). */
-function refreshAsyncReprs(state: MemoryState): void {
-  for (const obj of Object.values(state.heap)) {
-    if (obj.type === 'coroutine' || obj.type === 'task' || obj.type === 'eventloop') {
-      obj.repr = asyncRepr(obj.type, obj.value, state);
-    }
-  }
-}
-
-/**
- * `a.run(t1, t2, ...)` — the event loop. It builds a loop object whose ready
- * queue holds the tasks, then steps them round-robin, one task per tick, until
- * all are done. Each tick is one unit of interleaving; the round-robined stdout
- * is the visible proof the tasks ran cooperatively (A, B, A, B, …), not one
- * after the other.
- */
-function runEventLoop(args: RtValue[], state: MemoryState, line: number): void {
-  if (args.length < 1) throw new Error(`TypeError: run() takes at least one task (line ${line})`);
-  const taskIds = args.map((a) => ensureTaskId(a, state, line));
-  const ready = taskIds.filter((id) => (state.heap[id].value as TaskValue).status !== 'done');
-  const done = taskIds.filter((id) => (state.heap[id].value as TaskValue).status === 'done');
-  const loop: EventLoopValue = { running: true, ready, done, tick: 0 };
-  const loopObj = allocObject('eventloop', loop, asyncRepr('eventloop', loop, state));
-  state.heap[loopObj.id] = loopObj;
-
-  let guard = 0;
-  while (loop.ready.length > 0) {
-    const taskId = loop.ready.shift()!;
-    const task = state.heap[taskId];
-    if (!task || task.type !== 'task') {
-      loop.ready = [];
-      break;
-    }
-    const tv = task.value as TaskValue;
-    activeCoroutineId = tv.coro; // this step runs inside the task's coroutine
-    stepCoroutine(state);
-    activeCoroutineId = null;
-    loop.tick += 1;
-    state.ticks += 1;
-    const nowDone = (state.heap[tv.coro].value as CoroutineValue).status === 'done';
-    tv.status = nowDone ? 'done' : 'ready';
-    if (nowDone) loop.done.push(taskId);
-    else loop.ready.push(taskId);
-    // Refresh all async reprs after the state/queue update so the boxes agree.
-    refreshAsyncReprs(state);
-    if (guard++ > 10000) {
-      loop.running = false;
-      break;
-    }
-  }
-  loop.running = false;
-  refreshAsyncReprs(state);
-}
-
-/** Resolve a run() argument to a task object id (rejects lists / non-tasks). */
-function ensureTaskId(v: RtValue, state: MemoryState, line: number): string {
-  if (typeof v === 'string' && state.heap[v]?.type === 'task') return v;
-  throw new Error(`TypeError: run() takes tasks, got ${typeName(v, state)} (line ${line})`);
-}
-
-/* ————————————————— threading (concurrency exemplar) —————————————————
- *
- * A thread is a call running in its own frame that SHARES the module heap. The
- * faithful difference from asyncio: a thread is preempted after EVERY statement,
- * not just at an await. `join` is the scheduler — it round-robins the started
- * threads one statement at a time, so two threads visibly interleave on the
- * shared memory. A lock's acquire() on a held lock suspends the caller until the
- * holder release()s — mutual exclusion that makes an interleaved read-modify-write
- * (the classic lost-update race) safe.
- */
-
-type ThreadStatus = 'not-started' | 'running' | 'blocked' | 'done';
-
-interface ThreadValue {
-  target: string; // the function code object id this thread runs
-  name: string;
-  status: ThreadStatus;
-  pc: number;
-  body: AstNode[];
-  locals: Record<string, unknown>;
-  returnValue: RtValue;
-  blocked: boolean; // true while suspended on a held lock
-}
-
-interface LockValue {
-  held: boolean;
-  holder: string | null; // the thread id holding it, null when free
-}
-
-/**
- * The id of the thread currently being stepped by `threadJoin`, or null. Lets
- * `lockAcquire`/`lockRelease` know which thread is running (is the lock already
- * held by THIS thread?) and who to record as holder. The engine is
- * single-threaded, so a module pointer is safe — exactly how `activeCoroutineId`
- * works for asyncio.
- */
-let activeThreadId: string | null = null;
-
-function threadRepr(type: string, v: unknown): string {
-  if (type === 'thread') {
-    const t = v as ThreadValue;
-    return `Thread-${t.name} · ${t.status}`;
-  }
-  const l = v as LockValue;
-  return `Lock · ${l.held ? 'HELD' : 'free'}`;
-}
-
-/**
- * `t.Thread(target, args_tuple)` — make a thread that runs `target` with the
- * `args_tuple` elements as its parameters. It starts in **not-started**: the
- * target has not run yet. The parser has no keyword args, so `target` and the
- * `args` tuple are positional (`t.Thread(bump, (box,))`).
- */
-function makeThread(args: RtValue[], state: MemoryState, line: number): RtValue {
-  if (args.length < 1 || args.length > 2) {
-    throw new Error(`TypeError: Thread() takes (target[, args_tuple]) (line ${line})`);
-  }
-  const fnId = args[0];
-  const fn = typeof fnId === 'string' ? state.heap[fnId] : undefined;
-  if (!fn || fn.type !== 'function') {
-    throw new Error(`TypeError: Thread() target must be a function, got ${typeName(fnId, state)} (line ${line})`);
-  }
-  const code = fn.value as FunctionCode;
-  const params = code.params;
-  // Args come as a tuple (or list); its elements bind to the target's params.
-  let callArgs: RtValue[] = [];
-  if (args.length === 2) {
-    const tup = typeof args[1] === 'string' ? state.heap[args[1] as string] : undefined;
-    if (tup && ['tuple', 'list'].includes(tup.type)) {
-      callArgs = [...(tup.value as RtValue[])];
-    }
-  }
-  if (callArgs.length !== params.length) {
-    throw new Error(`TypeError: Thread() target ${code.name}() takes ${params.length} arg(s), got ${callArgs.length} (line ${line})`);
-  }
-  const locals: Record<string, unknown> = {};
-  params.forEach((p, i) => (locals[p] = callArgs[i]));
-  const v: ThreadValue = {
-    target: fnId as string,
-    name: code.name,
-    status: 'not-started',
-    pc: 0,
-    body: code.body,
-    locals,
-    returnValue: null,
-    blocked: false,
-  };
-  const obj = allocObject('thread', v, threadRepr('thread', v));
-  state.heap[obj.id] = obj;
-  return obj.id;
-}
-
-/** `t.Lock()` → a free lock. */
-function makeLock(state: MemoryState, line: number): RtValue {
-  void line;
-  const v: LockValue = { held: false, holder: null };
-  const obj = allocObject('lock', v, threadRepr('lock', v));
-  state.heap[obj.id] = obj;
-  return obj.id;
-}
-
-/** `thread.start()` — the thread becomes running (it runs under `join`). */
-function threadStart(objId: string, state: MemoryState, line: number): void {
-  const th = state.heap[objId].value as ThreadValue;
-  if (th.status === 'running' || th.status === 'blocked') {
-    throw new Error(`RuntimeError: cannot start thread ${th.name} (already started) (line ${line})`);
-  }
-  th.status = 'running';
-  th.pc = 0;
-  refreshThreadReprs(state);
-}
-
-/**
- * `lock.acquire()` — take the lock. Free (or already held by THIS thread) takes
- * immediately; held by ANOTHER thread suspends the caller (PySuspend) so it is
- * retried next round until the holder releases. Acquiring never advances `pc` —
- * a suspended thread re-runs `acquire()` on its next turn, which is what makes
- * blocking different from asyncio's one-shot `await`.
- */
-function lockAcquire(objId: string, state: MemoryState, line: number): RtValue {
-  void line;
-  const lk = state.heap[objId].value as LockValue;
-  if (lk.held && lk.holder !== activeThreadId) {
-    throw new PySuspend();
-  }
-  lk.held = true;
-  lk.holder = activeThreadId;
-  refreshThreadReprs(state);
-  return null;
-}
-
-/** `lock.release()` — free the lock. Only the holder (or a free lock) may. */
-function lockRelease(objId: string, state: MemoryState, line: number): RtValue {
-  const lk = state.heap[objId].value as LockValue;
-  if (lk.held && lk.holder !== activeThreadId) {
-    throw new Error(`RuntimeError: cannot release lock (not held by this thread) (line ${line})`);
-  }
-  lk.held = false;
-  lk.holder = null;
-  refreshThreadReprs(state);
-  return null;
-}
-
-/**
- * `thread.join()` — the scheduler. Every started (running or blocked) thread is
- * driven in a round-robin, ONE statement at a time, until they all finish. This
- * preemption is what makes threads race: a thread reads box[0], then the other
- * thread reads it too, THEN both write — so a write can be lost. A thread that
- * blocks on a held lock is suspended and retried the next round. A full round
- * with zero real progress is a deadlock (circular lock wait); we stop it rather
- * than hang, leaving the threads visibly blocked.
- */
-function threadJoin(objId: string, state: MemoryState, line: number): void {
-  const self = state.heap[objId];
-  if (!self || self.type !== 'thread') {
-    throw new Error(`TypeError: join() called on a non-thread (line ${line})`);
-  }
-  const selfTh = self.value as ThreadValue;
-  if (selfTh.status === 'not-started') threadStart(objId, state, line);
-
-  const active = Object.values(state.heap).filter((o) => o.type === 'thread');
-  let stalledRounds = 0;
-  for (;;) {
-    const live = active.filter((t) => {
-      const tv = t.value as ThreadValue;
-      return tv.status === 'running' || tv.status === 'blocked';
-    });
-    if (live.length === 0) break;
-    let progressed = false;
-    for (const t of live) {
-      const tv = t.value as ThreadValue;
-      if (tv.status === 'blocked') { tv.blocked = false; tv.status = 'running'; }
-      if (tv.pc >= tv.body.length) { tv.status = 'done'; progressed = true; continue; }
-      const before = tv.pc;
-      stepThread(t.id, state);
-      // A re-block (pc unchanged, back to blocked) is no real progress — the
-      // signal of a circular-wait deadlock.
-      if (tv.status === 'done' || tv.pc > before) progressed = true;
-    }
-    refreshThreadReprs(state);
-    if (!progressed) {
-      if (++stalledRounds > 10000) break; // deadlock: leave them blocked
-      continue;
-    }
-    stalledRounds = 0;
-  }
-  refreshThreadReprs(state);
-}
-
-/**
- * Step one thread by exactly ONE statement (not to its next suspension). This is
- * the preemption that lets threads interleave: read box[0], THEN hand off, THEN
- * write. Locals are saved back onto the thread across the yield; a lock-suspension
- * leaves `pc` on the `acquire()` so it retries.
- */
-function stepThread(threadId: string, state: MemoryState): void {
-  const th = state.heap[threadId].value as ThreadValue;
-  if (th.pc >= th.body.length) { th.status = 'done'; return; }
-  const frame: Frame = { name: `thread:${th.name}`, locals: {} };
-  for (const [k, v] of Object.entries(th.locals)) frame.locals[k] = v as RtValue;
-  state.frames.push(frame);
-  activeThreadId = threadId;
-  try {
-    try {
-      execStatement(th.body[th.pc]!, state);
-    } catch (err) {
-      if (err instanceof PySuspend) {
-        // Blocking on a held lock: stay on the acquire() (pc NOT advanced) and
-        // mark the thread blocked; the next round retries it.
-        th.blocked = true;
-        th.status = 'blocked';
-        return;
-      }
-      if (err instanceof PyReturn) {
-        th.returnValue = err.value;
-        th.pc = th.body.length;
-        th.status = 'done';
-        return;
-      }
-      throw err;
-    }
-    th.pc += 1;
-    if (th.pc >= th.body.length) th.status = 'done';
-  } finally {
-    for (const [k, v] of Object.entries(frame.locals)) th.locals[k] = v;
-    state.frames.pop();
-    activeThreadId = null;
-    refreshThreadReprs(state);
-    refreshReprs(state);
-  }
-}
-
-/** Recompute the repr of every thread (status) and lock (held/free). */
-function refreshThreadReprs(state: MemoryState): void {
-  for (const obj of Object.values(state.heap)) {
-    if (obj.type === 'thread' || obj.type === 'lock') {
-      obj.repr = threadRepr(obj.type, obj.value);
-    }
-  }
-}
-
-/* ————————————————— pandas (Phase 2) —————————————————
- *
- * A Series/DataFrame is *windows over a buffer*, the numpy picture lifted to a
- * table. `buffer` here reuses the numpy 'buffer' box (a flat run of numbers),
- * so the RAM view shows the same byte layout and a copy is a genuinely new
- * buffer. Two identities are taught: loc/iloc give a *live view* (shares the
- * buffer), and .copy() gives an *independent* buffer.
- */
-
-interface PandasBufferValue {
-  data: number[];
-  dtype: string;
-}
-
-/** A Series: a window over a buffer plus its row labels. */
-interface PandasSeriesValue {
-  buffer: string;
-  offset: number;
-  length: number;
-  dtype: string;
-  index: string[];
-  view: boolean;
-  name?: string;
-  /** The shared buffer a row/iloc view derives from (its `base`). */
-  source?: string;
-}
-
-/** A DataFrame: a window over a row-major buffer, plus labels. */
-interface PandasDataFrameValue {
-  buffer: string;
-  columns: string[];
-  index: string[];
-  dtype: string;
-  view: boolean;
-  /** First row of this window into the buffer (0 for an owning frame; a row-slice shares the buffer at an offset). */
-  rowOffset?: number;
-  source?: string;
-}
-
-/** The number of rows an object currently shows. */
-function frameRowCount(v: { length?: number; index?: string[] }): number {
-  if (typeof v.length === 'number') return v.length;
-  return v.index?.length ?? 0;
-}
-
-/**
- * Strip a display label down to a bare name: `'x'` → `x`. Dict keys are stored
- * as display labels (quoted for strings); pandas column names are the unquoted
- * value, so normalize on read and on lookup.
- */
-function colName(label: string): string {
-  if (label.startsWith('str:')) {
-    return label.slice(4);
-  }
-  if (label.startsWith("'") && label.endsWith("'") && label.length >= 2) {
-    return label.slice(1, -1).replace(/\\'/g, "'").replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
-  }
-  return label;
-}
-
-/** The numbers a Series window currently shows. */
-function seriesValues(sId: string, state: MemoryState): number[] {
-  const s = state.heap[sId].value as PandasSeriesValue;
-  const data = (state.heap[s.buffer].value as PandasBufferValue).data;
-  return data.slice(s.offset, s.offset + s.length);
-}
-
-/** First buffer row a DataFrame window starts at (0 for an owning frame). */
-function frameRowStart(v: PandasDataFrameValue): number {
-  return v.rowOffset ?? 0;
-}
-
-/** Read one column of a DataFrame window as a plain number run (row-major). */
-function frameColumn(dfId: string, col: string, state: MemoryState): number[] {
-  const v = state.heap[dfId].value as PandasDataFrameValue;
-  const data = (state.heap[v.buffer].value as PandasBufferValue).data;
-  const ci = v.columns.indexOf(col);
-  if (ci < 0) return [];
-  const rowStart = frameRowStart(v);
-  const nRows = frameRowCount(v);
-  const out: number[] = [];
-  for (let r = 0; r < nRows; r++) out.push(data[(rowStart + r) * v.columns.length + ci]!);
-  return out;
-}
-
-/** Column-major: the buffer layout for a set of rows × columns. */
-function frameBufferData(rows: Record<string, number[]>, columns: string[], nRows: number): number[] {
-  const out: number[] = [];
-  for (let r = 0; r < nRows; r++) for (const c of columns) out.push(rows[c]?.[r] ?? 0);
-  return out;
-}
-
-function makePandasBuffer(data: number[], dtype: string, state: MemoryState): string {
-  const obj = allocObject('buffer', { data, dtype } as PandasBufferValue, `[${data.join(', ')}]`);
-  state.heap[obj.id] = obj;
-  return obj.id;
-}
-
-/**
- * Build the canonical label + header repr for a Series or DataFrame so the box
- * and the RAM view both read like a pandas object (labels, column headers).
- */
-function pandasRepr(type: string, v: PandasSeriesValue | PandasDataFrameValue, state: MemoryState): string {
-  if (type === 'series') {
-    const s = v as PandasSeriesValue;
-    const data = (state.heap[s.buffer].value as PandasBufferValue).data;
-    const shown = data.slice(s.offset, s.offset + s.length);
-    const labels = s.index.slice(s.offset, s.offset + s.length);
-    const lines = labels.map((label, i) => `${String(label).padEnd(8)} ${shown[i] ?? 0}`);
-    const header = s.name ? `Series: ${s.name}` : 'Series';
-    return `${header}\n${lines.join('\n')}`;
-  }
-  const f = v as PandasDataFrameValue;
-  const data = (state.heap[f.buffer].value as PandasBufferValue).data;
-  const nRows = frameRowCount(f);
-  const rowStart = frameRowStart(f);
-  const head = f.columns.join('  ');
-  const lines: string[] = [head];
-  for (let r = 0; r < nRows; r++) {
-    const cells: string[] = [];
-    for (const c of f.columns) cells.push(String(data[(rowStart + r) * f.columns.length + f.columns.indexOf(c)] ?? 0));
-    lines.push(`${f.index[r] ?? ''}  ${cells.join('  ')}`);
-  }
-  return `DataFrame\n${lines.join('\n')}`;
-}
-
-/** `pd.Series([v0, v1, ...], index=[...])` → a Series window owning its buffer. */
-function makeSeries(args: RtValue[], state: MemoryState, line: number): RtValue {
-  if (args.length !== 1) throw new Error(`TypeError: Series() takes one argument (line ${line})`);
-  const data = readNumberSeries(args[0], state);
-  const bufId = makePandasBuffer(data, 'float64', state);
-  const v: PandasSeriesValue = {
-    buffer: bufId,
-    offset: 0,
-    length: data.length,
-    dtype: 'float64',
-    index: data.map((_, i) => String(i)),
-    view: false,
-  };
-  const obj = allocObject('series', v, '');
-  state.heap[obj.id] = obj;
-  obj.repr = pandasRepr('series', v, state);
-  return obj.id;
-}
-
-/** `pd.DataFrame({col: [...], ...})` → a DataFrame with one buffer (row-major). */
-function makeDataFrame(args: RtValue[], state: MemoryState, line: number): RtValue {
-  if (args.length !== 1) throw new Error(`TypeError: DataFrame() takes one argument (line ${line})`);
-  const obj = state.heap[args[0] as string];
-  if (!obj || obj.type !== 'dict') throw new Error(`TypeError: DataFrame() takes a dict of columns (line ${line})`);
-  const entries = obj.value as Array<[string, RtValue]>;
-  const columns = entries.map(([k]) => colName(k));
-  const colData = entries.map(([, v]) => readNumberSeries(v, state));
-  const nRows = Math.max(0, ...colData.map((c) => c.length));
-  const rows: Record<string, number[]> = {};
-  columns.forEach((c, ci) => (rows[c] = colData[ci]!));
-  const bufId = makePandasBuffer(frameBufferData(rows, columns, nRows), 'float64', state);
-  const v: PandasDataFrameValue = {
-    buffer: bufId,
-    columns,
-    index: Array.from({ length: nRows }, (_, i) => String(i)),
-    dtype: 'float64',
-    view: false,
-  };
-  const df = allocObject('dataframe', v, '');
-  state.heap[df.id] = df;
-  df.repr = pandasRepr('dataframe', v, state);
-  return df.id;
-}
-
-/**
- * Select one or more columns of a DataFrame. Returns a single Series for a
- * scalar column key, a new owning DataFrame for a list of columns.
- */
-function frameGetColumn(dfId: string, key: RtValue, state: MemoryState, line: number): RtValue {
-  const v = state.heap[dfId].value as PandasDataFrameValue;
-  const isList = typeof key === 'string' && state.heap[key] && state.heap[key].type === 'list';
-  const cols: string[] = [];
-  if (isList) {
-    for (const e of state.heap[key].value as RtValue[]) {
-      const c = colName(displayValue(e, state));
-      if (!v.columns.includes(c)) throw new PyKeyError(`column '${c}' (line ${line})`);
-      cols.push(c);
-    }
-  } else {
-    const c = colName(displayValue(key, state));
-    if (!v.columns.includes(c)) throw new PyKeyError(`column '${c}' (line ${line})`);
-    cols.push(c);
-  }
-
-  const nRows = frameRowCount(v);
-
-  if (cols.length === 1 && !isList) {
-    // a single named column is a Series. A column is not a contiguous run of
-    // the row-major buffer, so it gets its own single-column buffer.
-    const col = frameColumn(dfId, cols[0]!, state);
-    const s: PandasSeriesValue = {
-      buffer: makePandasBuffer(col, v.dtype, state),
-      offset: 0,
-      length: nRows,
-      dtype: v.dtype,
-      index: [...v.index],
-      view: false,
-      name: cols[0],
-    };
-    const so = allocObject('series', s, '');
-    state.heap[so.id] = so;
-    so.repr = pandasRepr('series', s, state);
-    return so.id;
-  }
-
-  // subset of columns → new owning DataFrame over a fresh buffer
-  const rows: Record<string, number[]> = {};
-  for (const c of cols) rows[c] = frameColumn(dfId, c, state);
-  const nbuf = makePandasBuffer(frameBufferData(rows, cols, nRows), v.dtype, state);
-  const nf: PandasDataFrameValue = {
-    buffer: nbuf,
-    columns: cols,
-    index: [...v.index],
-    dtype: v.dtype,
-    view: false,
-  };
-  const nd = allocObject('dataframe', nf, '');
-  state.heap[nd.id] = nd;
-  nd.repr = pandasRepr('dataframe', nf, state);
-  return nd.id;
-}
-
-/** `df.loc[rowIndex]` / `s.loc[rowIndex]` → a live row view (shares buffer). */
-function frameLocRow(objId: string, key: RtValue, state: MemoryState, line: number): RtValue {
-  const obj = state.heap[objId];
-  if (!obj) throw new Error(`TypeError: bad loc target (line ${line})`);
-  const label = displayValue(key, state);
-
-  if (obj.type === 'series') {
-    const s = obj.value as PandasSeriesValue;
-    const i = s.index.indexOf(label);
-    if (i < 0) throw new Error(`KeyError: ${label} (line ${line})`);
-    // a row of a Series is a scalar
-    return seriesValues(objId, state)[i]!;
-  }
-
-  if (obj.type === 'dataframe') {
-    const f = obj.value as PandasDataFrameValue;
-    const i = f.index.indexOf(label);
-    if (i < 0) throw new Error(`KeyError: ${label} (line ${line})`);
-    // a row of a DataFrame is a Series view over the shared buffer
-    const row: number[] = [];
-    for (const c of f.columns) row.push(frameColumn(objId, c, state)[i]!);
-    const s: PandasSeriesValue = {
-      buffer: state.heap[f.buffer].id,
-      offset: 0,
-      length: f.columns.length,
-      dtype: f.dtype,
-      index: [...f.columns],
-      view: true,
-    };
-    // materialize the row into its own single-row buffer so the RAM view shows
-    // a live window over the shared (row-major) store.
-    const rbuf = makePandasBuffer(row, f.dtype, state);
-    s.buffer = rbuf;
-    s.source = state.heap[f.buffer].id;
-    const so = allocObject('series', s, '');
-    state.heap[so.id] = so;
-    so.repr = pandasRepr('series', s, state);
-    return so.id;
-  }
-  throw new Error(`TypeError: '${obj.type}' has no .loc (line ${line})`);
-}
-
-/** `df.iloc[i]` / `s.iloc[i]` → a live position-based row view. */
-function frameIlocRow(objId: string, i0: RtValue, state: MemoryState, line: number): RtValue {
-  const i = Number(i0);
-  if (Number.isNaN(i)) throw new Error(`TypeError: iloc takes an integer (line ${line})`);
-  const obj = state.heap[objId];
-  if (!obj) throw new Error(`TypeError: bad iloc target (line ${line})`);
-
-  if (obj.type === 'series') {
-    const s = obj.value as PandasSeriesValue;
-    const n = frameRowCount(s);
-    const idx = i < 0 ? n + i : i;
-    if (idx < 0 || idx >= n) throw new Error(`IndexError: iloc out of range (line ${line})`);
-    return seriesValues(objId, state)[idx]!;
-  }
-  if (obj.type === 'dataframe') {
-    const f = obj.value as PandasDataFrameValue;
-    const n = frameRowCount(f);
-    const idx = i < 0 ? n + i : i;
-    if (idx < 0 || idx >= n) throw new Error(`IndexError: iloc out of range (line ${line})`);
-    const row: number[] = [];
-    for (const c of f.columns) row.push(frameColumn(objId, c, state)[idx]!);
-    const s: PandasSeriesValue = {
-      buffer: makePandasBuffer(row, f.dtype, state),
-      offset: 0,
-      length: f.columns.length,
-      dtype: f.dtype,
-      index: [...f.columns],
-      view: true,
-      source: state.heap[f.buffer].id,
-    };
-    const so = allocObject('series', s, '');
-    state.heap[so.id] = so;
-    so.repr = pandasRepr('series', s, state);
-    return so.id;
-  }
-  throw new Error(`TypeError: '${obj.type}' has no .iloc (line ${line})`);
-}
-
-/** `s.iloc[a:b]` / `df.iloc[a:b]` → a window (view) over a row range. */
-function frameIlocSlice(objId: string, start: RtValue, stop: RtValue, state: MemoryState, line: number): RtValue {
-  const obj = state.heap[objId];
-  if (!obj) throw new Error(`TypeError: bad iloc target (line ${line})`);
-  const a = start === null ? 0 : Number(start);
-  let e = stop === null ? 0 : Number(stop);
-
-  if (obj.type === 'series') {
-    const s = obj.value as PandasSeriesValue;
-    const n = frameRowCount(s);
-    e = stop === null ? n : e;
-    // a row-range of a Series is a *view*: a new window over the same buffer.
-    const v: PandasSeriesValue = {
-      buffer: s.buffer,
-      offset: s.offset + a,
-      length: Math.max(0, e - a),
-      dtype: s.dtype,
-      index: s.index.slice(a, e),
-      view: true,
-      name: s.name,
-    };
-    const o = allocObject('series', v, '');
-    state.heap[o.id] = o;
-    o.repr = pandasRepr('series', v, state);
-    return o.id;
-  }
-
-  if (obj.type === 'dataframe') {
-    const f = obj.value as PandasDataFrameValue;
-    const n = frameRowCount(f);
-    e = stop === null ? n : e;
-    // a row-range of a DataFrame is a *view*: a new window onto the SAME
-    // buffer at an offset. No data is copied — exactly the numpy idea.
-    const rowStart = frameRowStart(f) + a;
-    const v: PandasDataFrameValue = {
-      buffer: state.heap[f.buffer].id,
-      columns: [...f.columns],
-      index: f.index.slice(a, e),
-      dtype: f.dtype,
-      view: true,
-      rowOffset: rowStart,
-      source: state.heap[f.buffer].id,
-    };
-    const o = allocObject('dataframe', v, '');
-    state.heap[o.id] = o;
-    o.repr = pandasRepr('dataframe', v, state);
-    return o.id;
-  }
-  throw new Error(`TypeError: '${obj.type}' has no .iloc (line ${line})`);
-}
-
-/** `s.iloc[i] = v` / `df.iloc[i] = v` → write through the shared buffer. */
-function frameIlocSet(objId: string, i0: RtValue, value: RtValue, state: MemoryState, line: number): void {
-  const i = Number(i0);
-  const obj = state.heap[objId];
-  if (!obj) throw new Error(`TypeError: bad iloc target (line ${line})`);
-  if (obj.type === 'series') {
-    const s = obj.value as PandasSeriesValue;
-    const n = frameRowCount(s);
-    const idx = i < 0 ? n + i : i;
-    if (idx < 0 || idx >= n) throw new Error(`IndexError: iloc out of range (line ${line})`);
-    const data = (state.heap[s.buffer].value as PandasBufferValue).data;
-    data[s.offset + idx] = Number(value);
-    obj.repr = pandasRepr('series', s, state);
-    return;
-  }
-  if (obj.type === 'dataframe') {
-    const f = obj.value as PandasDataFrameValue;
-    const n = frameRowCount(f);
-    const idx = i < 0 ? n + i : i;
-    if (idx < 0 || idx >= n) throw new Error(`IndexError: iloc out of range (line ${line})`);
-    // value is a list (one per column); write the whole row into the buffer
-    const listObj = state.heap[value as string];
-    if (!listObj || listObj.type !== 'list') throw new Error(`TypeError: df.iloc row needs a list (line ${line})`);
-    const cells = listObj.value as RtValue[];
-    const rowStart = frameRowStart(f);
-    const data = (state.heap[f.buffer].value as PandasBufferValue).data;
-    for (let c = 0; c < f.columns.length; c++) data[(rowStart + idx) * f.columns.length + c] = Number(cells[c] ?? 0);
-    obj.repr = pandasRepr('dataframe', f, state);
-    return;
-  }
-  throw new Error(`TypeError: '${obj.type}' has no .iloc (line ${line})`);
-}
-
-/** `x.copy()` on a Series/DataFrame → a new owning buffer. */
-function frameCopy(objId: string, state: MemoryState, line: number): RtValue {
-  const obj = state.heap[objId];
-  if (!obj) throw new Error(`TypeError: bad copy target (line ${line})`);
-  if (obj.type === 'series') {
-    const s = obj.value as PandasSeriesValue;
-    const win = seriesValues(objId, state);
-    const v: PandasSeriesValue = {
-      buffer: makePandasBuffer([...win], s.dtype, state),
-      offset: 0,
-      length: win.length,
-      dtype: s.dtype,
-      index: s.index.slice(s.offset, s.offset + s.length),
-      view: false,
-      name: s.name,
-    };
-    const o = allocObject('series', v, '');
-    state.heap[o.id] = o;
-    o.repr = pandasRepr('series', v, state);
-    return o.id;
-  }
-  if (obj.type === 'dataframe') {
-    const f = obj.value as PandasDataFrameValue;
-    const data = (state.heap[f.buffer].value as PandasBufferValue).data;
-    const rowStart = frameRowStart(f);
-    const nRows = frameRowCount(f);
-    const win = data.slice(rowStart * f.columns.length, (rowStart + nRows) * f.columns.length);
-    const v: PandasDataFrameValue = {
-      buffer: makePandasBuffer([...win], f.dtype, state),
-      columns: [...f.columns],
-      index: [...f.index],
-      dtype: f.dtype,
-      view: false,
-    };
-    const o = allocObject('dataframe', v, '');
-    state.heap[o.id] = o;
-    o.repr = pandasRepr('dataframe', v, state);
-    return o.id;
-  }
-  throw new Error(`TypeError: '${obj.type}' has no .copy() (line ${line})`);
-}
-
-/** `s.sum()` / `df.sum()` → reduce (Series: one scalar; DF: per-column Series). */
-function frameSum(objId: string, state: MemoryState, line: number): RtValue {
-  const obj = state.heap[objId];
-  if (!obj) throw new Error(`TypeError: bad sum target (line ${line})`);
-  if (obj.type === 'series') {
-    return seriesValues(objId, state).reduce((a, b) => a + b, 0);
-  }
-  if (obj.type === 'dataframe') {
-    const f = obj.value as PandasDataFrameValue;
-    const sums = f.columns.map((c) => frameColumn(objId, c, state).reduce((a, b) => a + b, 0));
-    const s: PandasSeriesValue = {
-      buffer: makePandasBuffer(sums, 'float64', state),
-      offset: 0,
-      length: sums.length,
-      dtype: 'float64',
-      index: [...f.columns],
-      view: false,
-      name: 'sum',
-    };
-    const o = allocObject('series', s, '');
-    state.heap[o.id] = o;
-    o.repr = pandasRepr('series', s, state);
-    return o.id;
-  }
-  throw new Error(`TypeError: '${obj.type}' has no .sum() (line ${line})`);
-}
-
-/** `df['col']` / `df[['c1','c2']]` → a Series or column-subset DataFrame. */
-function frameSubscript(dfId: string, key: RtValue, state: MemoryState, line: number): RtValue {
-  return frameGetColumn(dfId, key, state, line);
-}
-
-/** `df['col'] = list` → replace a column's values in the shared buffer. */
-function frameSetColumn(dfId: string, colKey: RtValue, value: RtValue, state: MemoryState, line: number): void {
-  const f = state.heap[dfId].value as PandasDataFrameValue;
-  const col = colName(displayValue(colKey, state));
-  if (!f.columns.includes(col)) throw new Error(`KeyError: column '${col}' (line ${line})`);
-  const listObj = state.heap[value as string];
-  if (!listObj || listObj.type !== 'list') throw new Error(`TypeError: assigning a column needs a list (line ${line})`);
-  const cells = listObj.value as RtValue[];
-  const nRows = frameRowCount(f);
-  const ci = f.columns.indexOf(col);
-  const rowStart = frameRowStart(f);
-  const data = (state.heap[f.buffer].value as PandasBufferValue).data;
-  for (let r = 0; r < nRows; r++) data[(rowStart + r) * f.columns.length + ci] = Number(cells[r] ?? 0);
-  state.heap[dfId].repr = pandasRepr('dataframe', f, state);
-}
-
-/**
- * `pd.read_csv(name, {col: [...], ...})` → a DataFrame. Structure-only (the
- * fidelity boundary: the sandbox has no disk): the file's parsed content is
- * supplied explicitly, and the result is a real DataFrame whose structure is
- * the teaching point — the box is labeled with the source filename.
- */
-function readCsv(args: RtValue[], state: MemoryState, line: number): RtValue {
-  if (args.length !== 2) throw new Error(`TypeError: read_csv(name, data) takes two arguments (line ${line})`);
-  // a string-literal filename is a raw value; a bound name resolves to its str
-  const name = typeof args[0] === 'string' && state.heap[args[0]]?.type === 'str'
-    ? (state.heap[args[0]].value as string)
-    : displayValue(args[0], state);
-  const dfId = makeDataFrame([args[1]], state, line) as string;
-  const df = state.heap[dfId];
-  // label the box with the file it "came from" — the memory-model story
-  df.repr = `DataFrame (from ${name})\n${df.repr.slice('DataFrame\n'.length)}`;
-  return dfId;
-}
 
 /**
  * Python-style string repr using single quotes.
@@ -2765,7 +1792,10 @@ function lengthOf(v: RtValue, state: MemoryState): number {
     const obj = state.heap[v];
     if (['list', 'tuple', 'set', 'dict'].includes(obj.type)) return (obj.value as unknown[]).length;
     if (obj.type === 'defaultdict') return dictEntries(obj).length;
-    if (obj.type === 'ndarray') return (obj.value as NdarrayValue).shape;
+    if (obj.type === 'ndarray') {
+      const sh = (obj.value as NdarrayValue).shape;
+      return typeof sh === 'number' ? sh : sh[0]!;
+    }
     if (obj.type === 'str') return Array.from(obj.value as string).length;
     if (obj.type === 'range') return rangeLength(obj.value as RangeValue);
   }
@@ -2773,44 +1803,13 @@ function lengthOf(v: RtValue, state: MemoryState): number {
   throw new PyTypeError(`object has no len()`);
 }
 
-/**
- * Build numeric (x, y) point pairs from two containers for scatter()/line().
- * Each arg must be a heap list/tuple/set of numbers (or a raw number list).
- */
-function zipPoints(xs: RtValue, ys: RtValue, state: MemoryState): Array<[number, number]> {
-  const xArr = readNumberSeries(xs, state);
-  const yArr = readNumberSeries(ys, state);
-  const n = Math.min(xArr.length, yArr.length);
-  const pts: Array<[number, number]> = [];
-  for (let i = 0; i < n; i++) pts.push([xArr[i]!, yArr[i]!]);
-  return pts;
-}
-
-function readNumberSeries(v: RtValue, state: MemoryState): number[] {
-  if (typeof v === 'string' && state.heap[v]) {
-    const obj = state.heap[v];
-    if (['list', 'tuple', 'set'].includes(obj.type)) {
-      return (obj.value as RtValue[]).map((e) => {
-        const n = derefNumber(e, state);
-        if (Number.isNaN(n)) throw new PyTypeError('expected numeric points');
-        return n;
-      });
-    }
-    throw new PyTypeError(`${obj.type} is not an iterable of numbers`);
-  }
-  throw new PyTypeError('expected a list of numbers');
-}
-
 function binOp(op: string, left: RtValue, right: RtValue, state: MemoryState, line: number): RtValue {
   const lt = typeName(left, state);
   const rt = typeName(right, state);
 
-  // vectorized ndarray + scalar → a fresh buffer
-  if (op === '+' && (lt === 'ndarray' || rt === 'ndarray')) {
-    const scalar = lt === 'ndarray' ? right : left;
-    const arr = lt === 'ndarray' ? left : right;
-    if (typeof scalar !== 'number') throw new PyTypeError(`unsupported operand for + (line ${line})`);
-    return vecAdd(arr, scalar, state, line);
+  // vectorized ndarray operations (+, -, *, /) with broadcasting
+  if (['+', '-', '*', '/'].includes(op) && (lt === 'ndarray' || rt === 'ndarray')) {
+    return vecBinaryOp(left, op as any, right, state, line);
   }
 
   // String formatting with %: e.g. '%d' % 1
@@ -3111,7 +2110,7 @@ function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: 
   if (!obj) throw new PyTypeError(`object is not subscriptable (line ${line})`);
 
   if (obj.type === 'dataframe') {
-    return frameSubscript(objId as string, index, state, line);
+    return dataFrameGetColumn(objId as string, index, state, line);
   }
   if (obj.type === 'list' || obj.type === 'tuple') {
     const value = obj.value as RtValue[];
@@ -3127,9 +2126,10 @@ function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: 
   }
   if (obj.type === 'ndarray') {
     const v = obj.value as NdarrayValue;
+    const len = typeof v.shape === 'number' ? v.shape : v.shape[0]!;
     const i = Number(index);
-    const idx = i < 0 ? v.shape + i : i;
-    if (idx < 0 || idx >= v.shape) throw new PyIndexError(`index out of range (line ${line})`);
+    const idx = i < 0 ? len + i : i;
+    if (idx < 0 || idx >= len) throw new PyIndexError(`index out of range (line ${line})`);
     return (state.heap[v.buffer].value as NumpyBufferValue).data[v.offset + idx]!;
   }
   if (obj.type === 'dict' || obj.type === 'defaultdict') {
@@ -3154,25 +2154,64 @@ function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: 
   throw new PyTypeError(`'${obj.type}' object is not subscriptable (line ${line})`);
 }
 
-function sliceGet(objId: RtValue, start: RtValue, stop: RtValue, state: MemoryState, line: number): RtValue {
+function sliceGet(
+  objId: RtValue,
+  start: RtValue,
+  stop: RtValue,
+  step: RtValue,
+  state: MemoryState,
+  line: number
+): RtValue {
   const obj = state.heap[objId as string];
   if (!obj) throw new PyTypeError(`object is not sliceable (line ${line})`);
+  let len = 0;
+  if (obj.type === 'str') {
+    len = (obj.value as string).length;
+  } else if (obj.type === 'ndarray') {
+    const sh = (obj.value as NdarrayValue).shape;
+    len = typeof sh === 'number' ? sh : sh[0]!;
+  } else if (Array.isArray(obj.value)) {
+    len = (obj.value as RtValue[]).length;
+  }
   const s = start === null ? 0 : Number(start);
-  const e = stop === null
-    ? (obj.type === 'str' ? (obj.value as string).length : (obj.value as RtValue[]).length)
-    : Number(stop);
+  const e = stop === null ? len : Number(stop);
+  const st = step === null ? 1 : Number(step);
+
   if (obj.type === 'list' || obj.type === 'tuple') {
-    const elts = (obj.value as RtValue[]).slice(s, e);
+    const raw = obj.value as RtValue[];
+    let elts: RtValue[] = [];
+    if (st === 1) {
+      elts = raw.slice(s, e);
+    } else if (st === -1) {
+      const startIdx = start === null ? raw.length - 1 : Number(start);
+      const stopIdx = stop === null ? -1 : Number(stop);
+      for (let i = startIdx; i > stopIdx; i--) elts.push(raw[i]!);
+    } else if (st > 0) {
+      for (let i = s; i < e; i += st) elts.push(raw[i]!);
+    }
     const out = allocObject(obj.type, elts, '');
     state.heap[out.id] = out;
     out.repr = formatObject(out, state);
     return out.id;
   }
   if (obj.type === 'ndarray') {
-    return ndarraySlice(objId as string, start, stop, state, line);
+    return ndarraySlice(objId as string, start, stop, step, state, line);
+  }
+  if (obj.type === 'dataframe') {
+    return dataFrameIloc(objId as string, start, stop, state, line);
   }
   if (obj.type === 'str') {
-    return allocString((obj.value as string).slice(s, e), state);
+    const sStr = obj.value as string;
+    if (st === 1) return allocString(sStr.slice(s, e), state);
+    let res = '';
+    if (st === -1) {
+      const startIdx = start === null ? sStr.length - 1 : Number(start);
+      const stopIdx = stop === null ? -1 : Number(stop);
+      for (let i = startIdx; i > stopIdx; i--) res += sStr[i]!;
+    } else if (st > 0) {
+      for (let i = s; i < e; i += st) res += sStr[i]!;
+    }
+    return allocString(res, state);
   }
   throw new PyTypeError(`'${obj.type}' object is not sliceable (line ${line})`);
 }

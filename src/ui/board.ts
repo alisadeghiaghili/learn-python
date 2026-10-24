@@ -191,9 +191,9 @@ export class BoardView {
    * to the Plot tab (learn-r parity).
    */
   setPlots(plots: PlotSpec[]): void {
-    const hadPlot = this.plots.length > 0;
-    this.plots = plots;
-    const switching = plots.length > 0 && !hadPlot && this.currentTab !== 'plot';
+    const prevCount = this.plots.length;
+    this.plots = [...plots];
+    const switching = plots.length > 0 && prevCount === 0 && this.currentTab !== 'plot';
     if (switching) {
       this.currentTab = 'plot';
     }
