@@ -6,7 +6,7 @@
  */
 
 import { tokenize } from './tokenizer';
-import type { AstNode, KeywordNode, RtValue, Token, TokenType } from './types';
+import type { AstNode, ComprehensionClause, FStringPart, KeywordNode, RtValue, Token, TokenType } from './types';
 
 class Parser {
   private tokens: Token[];
@@ -126,6 +126,9 @@ class Parser {
     if (tok.type === 'KEYWORD' && tok.value === 'import') {
       return this.parseImport();
     }
+    if (tok.type === 'KEYWORD' && tok.value === 'class') {
+      return this.parseClassDef();
+    }
     if (tok.type === 'KEYWORD' && tok.value === 'if') {
       return this.parseIf();
     }
@@ -159,6 +162,7 @@ class Parser {
    * `{1, 2, 3}`). Nesting depth from `(`/`[`/`{` is tracked so a nested
    * container's colon doesn't misfire.
    */
+  // @ts-expect-error unused scanner retained for reference
   private scanHasColonBeforeCommaOrBrace(): boolean {
     let i = this.pos;
     let depth = 0;
@@ -284,10 +288,170 @@ class Parser {
     return { kind: 'If', test, body, elifs, elseBody, line: tok.line };
   }
 
+
+  private parseClassDef(): AstNode {
+    const tok = this.expect('KEYWORD', 'class');
+    const name = this.expect('NAME').value;
+    const bases: AstNode[] = [];
+    if (this.eatOp('(')) {
+      if (!(this.peek() && this.peek().type === 'OP' && this.peek().value === ')')) {
+        bases.push(this.parseExpr());
+        while (this.eatOp(',')) {
+          if (this.peek() && this.peek().type === 'OP' && this.peek().value === ')') break;
+          bases.push(this.parseExpr());
+        }
+      }
+      this.expect('OP', ')');
+    }
+    this.eatOp(':');
+    const body = this.parseSuite();
+    return { kind: 'ClassDef', name, bases, body, line: tok.line };
+  }
+
+  private parseTargetAtom(): AstNode {
+    const tok = this.peek();
+    if (!tok) {
+      throw new Error('SyntaxError: unexpected EOF while parsing target');
+    }
+    if (tok.type === 'NAME') {
+      this.next();
+      let node: AstNode = { kind: 'Name', id: tok.value, line: tok.line };
+      while (this.peek()?.type === 'OP' && (this.peek()?.value === '.' || this.peek()?.value === '[')) {
+        const op = this.next().value;
+        if (op === '.') {
+          const name = this.expect('NAME').value;
+          node = { kind: 'Attribute', object: node, attr: name, line: tok.line };
+        } else {
+          const index = this.parseExpr();
+          this.expect('OP', ']');
+          node = { kind: 'Subscript', object: node, index, line: tok.line };
+        }
+      }
+      return node;
+    }
+    if (tok.type === 'OP' && tok.value === '(') {
+      this.next();
+      if (this.eatOp(')')) {
+        return { kind: 'Tuple', elts: [], line: tok.line };
+      }
+      const first = this.parseTargetAtom();
+      if (this.eatOp(',')) {
+        const elts: AstNode[] = [first];
+        while (this.peek() && !(this.peek().type === 'OP' && this.peek().value === ')')) {
+          elts.push(this.parseTargetAtom());
+          if (!this.eatOp(',')) break;
+        }
+        this.expect('OP', ')');
+        return { kind: 'Tuple', elts, line: tok.line };
+      }
+      this.expect('OP', ')');
+      return first;
+    }
+    if (tok.type === 'OP' && tok.value === '[') {
+      this.next();
+      if (this.eatOp(']')) {
+        return { kind: 'List', elts: [], line: tok.line };
+      }
+      const elts: AstNode[] = [];
+      while (this.peek() && !(this.peek().type === 'OP' && this.peek().value === ']')) {
+        elts.push(this.parseTargetAtom());
+        if (!this.eatOp(',')) break;
+      }
+      this.expect('OP', ']');
+      return { kind: 'List', elts, line: tok.line };
+    }
+    throw new Error(`SyntaxError: invalid target syntax at line ${tok.line}: ${tok.value}`);
+  }
+
+  private parseTarget(): AstNode {
+    let target = this.parseTargetAtom();
+    if (this.peek()?.type === 'OP' && this.peek().value === ',') {
+      const elts = [target];
+      while (this.eatOp(',')) {
+        const nextTok = this.peek();
+        if (
+          !nextTok ||
+          (nextTok.type === 'KEYWORD' && nextTok.value === 'in') ||
+          (nextTok.type === 'OP' && (nextTok.value === ')' || nextTok.value === ']' || nextTok.value === ':'))
+        ) {
+          break;
+        }
+        elts.push(this.parseTargetAtom());
+      }
+      target = { kind: 'Tuple', elts, line: target.line };
+    }
+    return target;
+  }
+
+  private parseComprehensionClauses(): ComprehensionClause[] {
+    const clauses: ComprehensionClause[] = [];
+    while (this.peek()?.type === 'KEYWORD' && this.peek().value === 'for') {
+      this.next();
+      const target = this.parseTarget();
+      this.expect('KEYWORD', 'in');
+      const iter = this.parseExpr();
+      const ifs: AstNode[] = [];
+      while (this.peek()?.type === 'KEYWORD' && this.peek().value === 'if') {
+        this.next();
+        ifs.push(this.parseExpr());
+      }
+      clauses.push({ target, iter, ifs });
+    }
+    return clauses;
+  }
+
+  private parseFStringParts(raw: string, line: number): FStringPart[] {
+    const parts: FStringPart[] = [];
+    let i = 0;
+    let literal = '';
+    while (i < raw.length) {
+      if (raw[i] === '{') {
+        if (raw[i + 1] === '{') {
+          literal += '{';
+          i += 2;
+          continue;
+        }
+        if (literal.length > 0) {
+          parts.push({ kind: 'literal', value: literal });
+          literal = '';
+        }
+        let depth = 1;
+        let j = i + 1;
+        while (j < raw.length && depth > 0) {
+          if (raw[j] === '{') depth++;
+          else if (raw[j] === '}') depth--;
+          if (depth === 0) break;
+          j++;
+        }
+        if (depth !== 0) throw new Error(`SyntaxError: f-string: unmatched '{' at line ${line}`);
+        const exprStr = raw.slice(i + 1, j);
+        const subTokens = tokenize(exprStr);
+        const subParser = new Parser(subTokens);
+        const exprNode = (subParser as any).parseExpr();
+        parts.push({ kind: 'expr', value: exprNode });
+        i = j + 1;
+      } else if (raw[i] === '}') {
+        if (raw[i + 1] === '}') {
+          literal += '}';
+          i += 2;
+          continue;
+        }
+        throw new Error(`SyntaxError: f-string: single '}' not allowed at line ${line}`);
+      } else {
+        literal += raw[i];
+        i++;
+      }
+    }
+    if (literal.length > 0) {
+      parts.push({ kind: 'literal', value: literal });
+    }
+    return parts;
+  }
+
   /** `for <name> in <iterable>:` body [else: body] */
   private parseFor(): AstNode {
     const tok = this.expect('KEYWORD', 'for');
-    const target = this.expect('NAME').value;
+    const target = this.parseTarget();
     this.expect('KEYWORD', 'in');
     const iterable = this.parseExpr();
     this.eatOp(':');
@@ -411,12 +575,28 @@ class Parser {
   /** Assignment, expression statement, print, augmented assign. */
   private parseSimpleStatement(): AstNode {
     const line = this.peek().line;
-    const expr = this.parseExpr();
+    let expr = this.parseExpr();
+    if (this.peek()?.type === 'OP' && this.peek().value === ',') {
+      const elts = [expr];
+      while (this.eatOp(',')) {
+        if (!this.peek() || this.peek().type === 'NEWLINE' || this.peek().value === '=') break;
+        elts.push(this.parseExpr());
+      }
+      expr = { kind: 'Tuple', elts, line };
+    }
     const tok = this.peek();
 
     if (tok && tok.type === 'OP' && tok.value === '=') {
       this.next();
-      const value = this.parseExpr();
+      let value = this.parseExpr();
+      if (this.peek()?.type === 'OP' && this.peek().value === ',') {
+        const elts = [value];
+        while (this.eatOp(',')) {
+          if (!this.peek() || this.peek().type === 'NEWLINE') break;
+          elts.push(this.parseExpr());
+        }
+        value = { kind: 'Tuple', elts, line };
+      }
       this.eatNewline();
       return { kind: 'Assign', target: expr, value, line };
     }
@@ -496,6 +676,10 @@ class Parser {
         } else {
           op = 'is';
         }
+      } else if (tok.type === 'KEYWORD' && tok.value === 'not' && this.tokens[this.pos + 1]?.type === 'KEYWORD' && this.tokens[this.pos + 1]?.value === 'in') {
+        this.next();
+        this.next();
+        op = 'not in';
       } else if (tok.type === 'KEYWORD' && tok.value === 'in') {
         this.next();
         op = 'in';
@@ -656,6 +840,11 @@ class Parser {
       }
       return { kind: 'Literal', value, isFloat, line: tok.line };
     }
+    if (tok.type === 'FSTRING') {
+      this.next();
+      const parts = this.parseFStringParts(tok.value, tok.line);
+      return { kind: 'FString', parts, line: tok.line };
+    }
     if (tok.type === 'STRING') {
       this.next();
       return { kind: 'Literal', value: tok.value, line: tok.line };
@@ -698,13 +887,20 @@ class Parser {
     }
     if (tok.type === 'OP' && tok.value === '[') {
       this.next();
-      const elts: AstNode[] = [];
-      if (!(this.peek()?.type === 'OP' && this.peek().value === ']')) {
+      if (this.peek()?.type === 'OP' && this.peek().value === ']') {
+        this.next();
+        return { kind: 'List', elts: [], line: tok.line };
+      }
+      const first = this.parseExpr();
+      if (this.peek()?.type === 'KEYWORD' && this.peek().value === 'for') {
+        const generators = this.parseComprehensionClauses();
+        this.expect('OP', ']');
+        return { kind: 'ListComp', elt: first, generators, line: tok.line };
+      }
+      const elts: AstNode[] = [first];
+      while (this.eatOp(',')) {
+        if (this.peek()?.type === 'OP' && this.peek().value === ']') break;
         elts.push(this.parseExpr());
-        while (this.eatOp(',')) {
-          if (this.peek()?.type === 'OP' && this.peek().value === ']') break;
-          elts.push(this.parseExpr());
-        }
       }
       this.expect('OP', ']');
       return { kind: 'List', elts, line: tok.line };
@@ -713,29 +909,36 @@ class Parser {
       this.next();
       if (this.peek()?.type === 'OP' && this.peek().value === '}') {
         this.next();
-        // {} is the empty dict in Python; empty sets must be built with set().
         return { kind: 'Dict', keys: [], values: [], line: tok.line };
       }
-      // Set vs dict: a dict's first entry has a `:` before any `,` or `}`.
-      const isDict = this.scanHasColonBeforeCommaOrBrace();
-      if (isDict) {
-        const keys: AstNode[] = [];
-        const values: AstNode[] = [];
-        for (;;) {
+      const first = this.parseExpr();
+      if (this.eatOp(':')) {
+        const firstVal = this.parseExpr();
+        if (this.peek()?.type === 'KEYWORD' && this.peek().value === 'for') {
+          const generators = this.parseComprehensionClauses();
+          this.expect('OP', '}');
+          return { kind: 'DictComp', key: first, value: firstVal, generators, line: tok.line };
+        }
+        const keys: AstNode[] = [first];
+        const values: AstNode[] = [firstVal];
+        while (this.eatOp(',')) {
+          if (this.peek()?.type === 'OP' && this.peek().value === '}') break;
           keys.push(this.parseExpr());
           this.expect('OP', ':');
           values.push(this.parseExpr());
-          if (!this.eatOp(',')) break;
-          if (this.peek()?.type === 'OP' && this.peek().value === '}') break;
         }
         this.expect('OP', '}');
         return { kind: 'Dict', keys, values, line: tok.line };
       }
-      const elts: AstNode[] = [];
-      for (;;) {
-        elts.push(this.parseExpr());
-        if (!this.eatOp(',')) break;
+      if (this.peek()?.type === 'KEYWORD' && this.peek().value === 'for') {
+        const generators = this.parseComprehensionClauses();
+        this.expect('OP', '}');
+        return { kind: 'SetComp', elt: first, generators, line: tok.line };
+      }
+      const elts: AstNode[] = [first];
+      while (this.eatOp(',')) {
         if (this.peek()?.type === 'OP' && this.peek().value === '}') break;
+        elts.push(this.parseExpr());
       }
       this.expect('OP', '}');
       return { kind: 'Set', elts, line: tok.line };

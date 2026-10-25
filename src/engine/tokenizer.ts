@@ -77,6 +77,28 @@ export function tokenize(source: string): Token[] {
         i++;
         continue;
       }
+      if ((ch === 'f' || ch === 'F') && i + 1 < line.length && (line[i + 1] === '"' || line[i + 1] === "'")) {
+        const quote = line[i + 1];
+        let j = i + 2;
+        let strVal = '';
+        while (j < line.length && line[j] !== quote) {
+          if (line[j] === '\\') {
+            j++;
+            if (j >= line.length) break;
+            strVal += '\\' + line[j];
+            j++;
+          } else {
+            strVal += line[j];
+            j++;
+          }
+        }
+        if (j >= line.length) {
+          throw new Error(`SyntaxError: unterminated string at line ${lineNo + 1}`);
+        }
+        tokens.push({ type: 'FSTRING', value: strVal, line: lineNo + 1, col: i + 1 });
+        i = j + 1;
+        continue;
+      }
       if (ch === '"' || ch === "'") {
         const quote = ch;
         let j = i + 1;

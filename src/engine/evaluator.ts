@@ -231,6 +231,29 @@ interface ScopeInfo {
   nonlocals: Set<string>;
 }
 
+const BUILTIN_EXCEPTIONS = new Set([
+  'BaseException',
+  'Exception',
+  'ArithmeticError',
+  'LookupError',
+  'TypeError',
+  'ValueError',
+  'ZeroDivisionError',
+  'IndexError',
+  'KeyError',
+  'AttributeError',
+  'NameError',
+  'UnboundLocalError',
+  'RuntimeError',
+  'RecursionError',
+  'ModuleNotFoundError',
+  'StopIteration',
+  'OverflowError',
+  'AssertionError',
+  'FileNotFoundError',
+  'NotImplementedError',
+]);
+
 const KNOWN_MODULES = new Set([
   'math',
   'copy',
@@ -288,7 +311,8 @@ function analyzeLocals(body: AstNode[]): ScopeInfo {
         if (stmt.target.kind === 'Name') assigned.add(stmt.target.id);
         break;
       case 'For':
-        assigned.add(stmt.target);
+        if (typeof stmt.target === 'string') assigned.add(stmt.target);
+        else extractTargetNames(stmt.target);
         for (const s of stmt.body) walk(s);
         if (stmt.elseBody) for (const s of stmt.elseBody) walk(s);
         break;
@@ -432,6 +456,44 @@ function execStatement(node: AstNode, state: MemoryState): void {
       const value = node.value ? evalExpr(node.value, state) : null;
       throw new PyReturn(value);
     }
+    case 'ClassDef': {
+      const bases = node.bases.map((b) => {
+        const bVal = evalExpr(b, state);
+        if (typeof bVal === 'string' && state.heap[bVal]?.type === 'class') {
+          return bVal;
+        }
+        throw new PyTypeError(`base class must be a class (line ${node.line})`);
+      });
+      const clsObj = allocObject('class', {
+        name: node.name,
+        bases,
+        fields: {},
+        methods: {},
+      }, `<class '${node.name}'>`);
+      state.heap[clsObj.id] = clsObj;
+      const classFrame: Frame = {
+        name: node.name,
+        locals: {},
+      };
+      state.frames.push(classFrame);
+      try {
+        for (const st of node.body) {
+          execStatement(st, state);
+        }
+      } finally {
+        state.frames.pop();
+      }
+      const clsVal = clsObj.value as any;
+      for (const [k, v] of Object.entries(classFrame.locals)) {
+        if (typeof v === 'string' && state.heap[v]?.type === 'function') {
+          clsVal.methods[k] = v;
+        } else {
+          clsVal.fields[k] = v;
+        }
+      }
+      setFrameLocal(currentFrame(state), node.name, clsObj.id);
+      return;
+    }
     case 'FunctionDef': {
       const paramDefaults: Record<string, RtValue> = {};
       if (node.paramDefaults) {
@@ -544,7 +606,7 @@ function execStatement(node: AstNode, state: MemoryState): void {
         let loopGuard = 0;
         while (i < targetList.length) {
           if (++loopGuard > 100000) throw new PyRecursionError('for loop did not terminate (infinite loop)');
-          setFrameLocal(currentFrame(state), node.target, targetList[i]!);
+          if (typeof node.target === 'string') setFrameLocal(currentFrame(state), node.target, targetList[i]!); else bindTarget(node.target, targetList[i]!, state);
           try {
             execBody(node.body, state);
           } catch (e) {
@@ -558,7 +620,7 @@ function execStatement(node: AstNode, state: MemoryState): void {
       } else {
         const items = iterableToRtValues(iterVal, state, node.line);
         for (let i = 0; i < items.length; i++) {
-          setFrameLocal(currentFrame(state), node.target, items[i]!);
+          if (typeof node.target === 'string') setFrameLocal(currentFrame(state), node.target, items[i]!); else bindTarget(node.target, items[i]!, state);
           try {
             execBody(node.body, state);
           } catch (e) {
@@ -617,7 +679,13 @@ function execStatement(node: AstNode, state: MemoryState): void {
           }
           if (handled) {
             if (handler.name) {
-              setFrameLocal(currentFrame(state), handler.name, String(e));
+              const excMsg = e instanceof Error ? e.message.replace(/^[A-Za-z]+Error: /, '') : String(e);
+              const excObj = allocObject('exception', {
+                typeName: e instanceof PyException ? e.pythonName : (e instanceof Error ? e.name : 'Exception'),
+                message: excMsg,
+              }, excMsg);
+              state.heap[excObj.id] = excObj;
+              setFrameLocal(currentFrame(state), handler.name, excObj.id);
             }
             execBody(handler.body, state);
             break;
@@ -635,10 +703,18 @@ function execStatement(node: AstNode, state: MemoryState): void {
     }
     case 'Raise': {
       if (!node.exc) {
-        throw new PyException('RuntimeError', 'No active exception to reraise');
+        throw new PyRuntimeError('No active exception to reraise');
       }
       const excVal = evalExpr(node.exc, state);
-      throw new PyException(typeName(excVal, state), displayValue(excVal, state));
+      if (typeof excVal === 'string' && state.heap[excVal]?.type === 'exception') {
+        const exc = state.heap[excVal].value as { typeName: string; message: string };
+        throw new PyException(exc.typeName, exc.message);
+      }
+      if (typeof excVal === 'string' && state.heap[excVal]?.type === 'type') {
+        const tName = (state.heap[excVal].value as { name: string }).name;
+        throw new PyException(tName, '');
+      }
+      throw new PyTypeError(`exceptions must derive from BaseException (line ${node.line})`);
     }
     case 'Break':
       throw new PyBreak();
@@ -722,7 +798,7 @@ function lookupName(name: string, state: MemoryState, line: number): RtValue {
     return curFrame.closure[name]!.value;
   }
 
-  if (['int', 'float', 'str', 'bool', 'list', 'dict', 'tuple', 'set', 'range', 'type'].includes(name)) {
+  if (['int', 'float', 'str', 'bool', 'list', 'dict', 'tuple', 'set', 'range', 'type'].includes(name) || BUILTIN_EXCEPTIONS.has(name)) {
     return getTypeObject(name, state);
   }
   if (BUILTIN_CONSTRUCTORS.has(name)) {
@@ -737,6 +813,30 @@ function lookupName(name: string, state: MemoryState, line: number): RtValue {
  * Assign to a target expression.
  */
 function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
+  if (target.kind === 'Tuple' || target.kind === 'List') {
+    const items = iterableToRtValues(value, state, target.line);
+    if (items.length !== target.elts.length) {
+      if (items.length < target.elts.length) {
+        throw new PyValueError(`not enough values to unpack (expected ${target.elts.length}, got ${items.length})`);
+      } else {
+        throw new PyValueError(`too many values to unpack (expected ${target.elts.length}, got ${items.length})`);
+      }
+    }
+    for (let i = 0; i < target.elts.length; i++) {
+      bindTarget(target.elts[i]!, items[i]!, state);
+    }
+    return;
+  }
+  if (target.kind === 'Attribute') {
+    const objId = evalExpr(target.object, state);
+    if (typeof objId === 'string' && state.heap[objId]?.type === 'instance') {
+      const inst = state.heap[objId].value as any;
+      inst.fields[target.attr] = value;
+      return;
+    }
+    throw new PyAttributeError(`cannot assign attribute '${target.attr}' (line ${target.line})`);
+  }
+
   if (target.kind === 'Name') {
     const current = currentFrame(state) as Frame & { scopeInfo?: ScopeInfo };
     if (current.scopeInfo) {
@@ -972,6 +1072,42 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
       }
       if (typeof objVal === 'string' && state.heap[objVal]) {
         const obj = state.heap[objVal];
+        if (obj.type === 'instance') {
+          const inst = obj.value as any;
+          if (inst.fields && node.attr in inst.fields) {
+            return inst.fields[node.attr];
+          }
+          let curClsId: string | undefined = inst.classId;
+          while (curClsId && state.heap[curClsId]) {
+            const cls = state.heap[curClsId].value as any;
+            if (cls.fields && node.attr in cls.fields) {
+              return cls.fields[node.attr];
+            }
+            curClsId = cls.bases?.[0];
+          }
+          throw new PyAttributeError(`'${inst.className}' object has no attribute '${node.attr}' (line ${node.line})`);
+        }
+        if (obj.type === 'class') {
+          const cls = obj.value as any;
+          if (cls.fields && node.attr in cls.fields) {
+            return cls.fields[node.attr];
+          }
+          if (cls.methods && node.attr in cls.methods) {
+            return cls.methods[node.attr];
+          }
+          let curClsId: string | undefined = cls.bases?.[0];
+          while (curClsId && state.heap[curClsId]) {
+            const baseCls = state.heap[curClsId].value as any;
+            if (baseCls.fields && node.attr in baseCls.fields) {
+              return baseCls.fields[node.attr];
+            }
+            if (baseCls.methods && node.attr in baseCls.methods) {
+              return baseCls.methods[node.attr];
+            }
+            curClsId = baseCls.bases?.[0];
+          }
+          throw new PyAttributeError(`type object '${cls.name}' has no attribute '${node.attr}' (line ${node.line})`);
+        }
         if (obj.type === 'ndarray') {
           return ndarrayGetAttr(objVal, node.attr, state, node.line);
         }
@@ -1001,6 +1137,14 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
       const t = typeName(objVal, state);
       throw new PyAttributeError(`'${t}' object has no attribute '${node.attr}' (line ${node.line})`);
     }
+    case 'ListComp':
+      return evalListComp(node, state);
+    case 'DictComp':
+      return evalDictComp(node, state);
+    case 'SetComp':
+      return evalSetComp(node, state);
+    case 'FString':
+      return evalFString(node, state);
     case 'Call': {
       return evalCall(node, state);
     }
@@ -1166,6 +1310,101 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
       obj.repr = formatObject(obj, state);
       return obj.id;
     }
+    if (name === 'super') {
+      const current = currentFrame(state);
+      const selfVal = current?.locals['self'];
+      if (!selfVal || typeof selfVal !== 'string' || !state.heap[selfVal]) {
+        throw new PyTypeError(`super() requires self instance`);
+      }
+      const inst = state.heap[selfVal].value as any;
+      const cls = state.heap[inst.classId]?.value as any;
+      const baseClassId = cls?.bases?.[0];
+      const superProxy = allocObject('super_proxy', { instId: selfVal, classId: baseClassId }, `<super>`);
+      state.heap[superProxy.id] = superProxy;
+      return superProxy.id;
+    }
+    if (name === 'enumerate') {
+      const start = kwargs['start'] !== undefined ? Number(kwargs['start']) : (args[1] !== undefined ? Number(args[1]) : 0);
+      const items = iterableToRtValues(args[0], state, node.line);
+      const result: RtValue[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const pair = allocObject('tuple', [start + i, items[i]!], '');
+        state.heap[pair.id] = pair;
+        pair.repr = formatObject(pair, state);
+        result.push(pair.id);
+      }
+      const obj = allocObject('list', result, '');
+      state.heap[obj.id] = obj;
+      obj.repr = formatObject(obj, state);
+      return obj.id;
+    }
+    if (name === 'zip') {
+      const iters = args.map((a) => iterableToRtValues(a, state, node.line));
+      const minLen = iters.length === 0 ? 0 : Math.min(...iters.map((it) => it.length));
+      const result: RtValue[] = [];
+      for (let i = 0; i < minLen; i++) {
+        const tupleElts = iters.map((it) => it[i]!);
+        const pair = allocObject('tuple', tupleElts, '');
+        state.heap[pair.id] = pair;
+        pair.repr = formatObject(pair, state);
+        result.push(pair.id);
+      }
+      const obj = allocObject('list', result, '');
+      state.heap[obj.id] = obj;
+      obj.repr = formatObject(obj, state);
+      return obj.id;
+    }
+    if (name === 'reversed') {
+      const items = iterableToRtValues(args[0], state, node.line).slice().reverse();
+      const obj = allocObject('list', items, '');
+      state.heap[obj.id] = obj;
+      obj.repr = formatObject(obj, state);
+      return obj.id;
+    }
+    if (name === 'all') {
+      const items = iterableToRtValues(args[0], state, node.line);
+      for (const item of items) {
+        if (!truthy(item, state)) return false;
+      }
+      return true;
+    }
+    if (name === 'any') {
+      const items = iterableToRtValues(args[0], state, node.line);
+      for (const item of items) {
+        if (truthy(item, state)) return true;
+      }
+      return false;
+    }
+    if (name === 'round') {
+      const num = Number(derefNumber(args[0], state));
+      const ndigits = args[1] !== undefined ? Number(args[1]) : 0;
+      if (ndigits === 0) {
+        const floor = Math.floor(num);
+        const diff = num - floor;
+        if (Math.abs(diff - 0.5) < 1e-12) {
+          return floor % 2 === 0 ? floor : floor + 1;
+        }
+        return Math.round(num);
+      }
+      const factor = Math.pow(10, ndigits);
+      const rounded = Math.round(num * factor) / factor;
+      return allocFloat(rounded, state);
+    }
+    if (name === 'chr') {
+      const code = Number(args[0]);
+      if (isNaN(code) || code < 0 || code > 0x10ffff) {
+        throw new PyValueError(`chr() arg not in range(0x110000) (line ${node.line})`);
+      }
+      return allocString(String.fromCodePoint(code), state);
+    }
+    if (name === 'ord') {
+      const sVal = typeof args[0] === 'string' && state.heap[args[0]]?.type === 'str' ? (state.heap[args[0]].value as string) : String(args[0]);
+      const codePoints = Array.from(sVal);
+      if (codePoints.length !== 1) {
+        throw new PyTypeError(`ord() expected a character, but string of length ${codePoints.length} found (line ${node.line})`);
+      }
+      return codePoints[0]!.codePointAt(0)!;
+    }
     const fnId = lookupName(name, state, node.line);
     return callUserFunction(fnId, args, state, node.line, kwargs);
   }
@@ -1214,6 +1453,42 @@ function callUserFunction(
     throw new PyRecursionError(`maximum recursion depth exceeded (line ${line})`);
   }
   const fn = state.heap[fnId as string];
+  if (fn && fn.type === 'class') {
+    const cls = fn.value as any;
+    const instObj = allocObject('instance', {
+      className: cls.name,
+      classId: fnId as string,
+      fields: {},
+    }, `<${cls.name} object>`);
+    state.heap[instObj.id] = instObj;
+    let curClsId: string | undefined = fnId as string;
+    let initFnId: string | undefined = undefined;
+    while (curClsId && state.heap[curClsId]) {
+      const c = state.heap[curClsId].value as any;
+      if (c.methods && '__init__' in c.methods) {
+        initFnId = c.methods['__init__'];
+        break;
+      }
+      curClsId = c.bases?.[0];
+    }
+    if (initFnId) {
+      callUserFunction(initFnId, [instObj.id, ...args], state, line, kwargs);
+    }
+    return instObj.id;
+  }
+  if (fn && fn.type === 'type') {
+    const tName = (fn.value as { name: string }).name;
+    if (BUILTIN_EXCEPTIONS.has(tName)) {
+      const msg = args[0] !== undefined
+        ? (typeof args[0] === 'string' && state.heap[args[0]]?.type === 'str'
+            ? (state.heap[args[0]].value as string)
+            : displayValue(args[0], state))
+        : '';
+      const excObj = allocObject('exception', { typeName: tName, message: msg }, `${tName}: ${msg}`);
+      state.heap[excObj.id] = excObj;
+      return excObj.id;
+    }
+  }
   if (!fn || fn.type !== 'function') {
     if (fn && fn.type === 'builtin') {
       const bName = fn.value as string;
@@ -1287,6 +1562,34 @@ function callMethod(
 ): RtValue {
   const obj = state.heap[objId as string];
   if (!obj) throw new PyAttributeError(`bad method target (line ${line})`);
+
+  if (obj.type === 'instance') {
+    const inst = obj.value as any;
+    if (inst.fields && method in inst.fields) {
+      return callUserFunction(inst.fields[method], args, state, line, kwargs);
+    }
+    let curClsId: string | undefined = inst.classId;
+    while (curClsId && state.heap[curClsId]) {
+      const cls = state.heap[curClsId].value as any;
+      if (cls.methods && method in cls.methods) {
+        return callUserFunction(cls.methods[method], [objId, ...args], state, line, kwargs);
+      }
+      curClsId = cls.bases?.[0];
+    }
+    throw new PyAttributeError(`'${inst.className}' object has no attribute '${method}' (line ${line})`);
+  }
+  if (obj.type === 'super_proxy') {
+    const proxy = obj.value as any;
+    let curClsId: string | undefined = proxy.classId;
+    while (curClsId && state.heap[curClsId]) {
+      const cls = state.heap[curClsId].value as any;
+      if (cls.methods && method in cls.methods) {
+        return callUserFunction(cls.methods[method], [proxy.instId, ...args], state, line, kwargs);
+      }
+      curClsId = cls.bases?.[0];
+    }
+    throw new PyAttributeError(`super object has no attribute '${method}' (line ${line})`);
+  }
 
   if (obj.type === 'module') {
     const modName = (obj.value as { name: string }).name;
@@ -2345,3 +2648,139 @@ function printArg(v: RtValue, state: MemoryState): string {
 }
 
 export { cloneState, createModuleState };
+
+function evalListComp(node: any, state: MemoryState): RtValue {
+  const result: RtValue[] = [];
+  const compFrame: Frame = { name: '<listcomp>', locals: {} };
+  state.frames.push(compFrame);
+  try {
+    function runGen(idx: number): void {
+      if (idx >= node.generators.length) {
+        result.push(evalExpr(node.elt, state));
+        return;
+      }
+      const g = node.generators[idx];
+      const items = iterableToRtValues(evalExpr(g.iter, state), state, node.line);
+      for (const item of items) {
+        if (typeof g.target === 'string') {
+          setFrameLocal(compFrame, g.target, item);
+        } else {
+          bindTarget(g.target, item, state);
+        }
+        let keep = true;
+        for (const ifExpr of g.ifs) {
+          if (!truthy(evalExpr(ifExpr, state), state)) {
+            keep = false;
+            break;
+          }
+        }
+        if (keep) runGen(idx + 1);
+      }
+    }
+    runGen(0);
+  } finally {
+    state.frames.pop();
+  }
+  const obj = allocObject('list', result, '');
+  state.heap[obj.id] = obj;
+  obj.repr = formatObject(obj, state);
+  return obj.id;
+}
+
+function evalDictComp(node: any, state: MemoryState): RtValue {
+  const pairs: Array<[string, RtValue]> = [];
+  const compFrame: Frame = { name: '<dictcomp>', locals: {} };
+  state.frames.push(compFrame);
+  try {
+    function runGen(idx: number): void {
+      if (idx >= node.generators.length) {
+        const k = evalExpr(node.key, state);
+        const v = evalExpr(node.value, state);
+        const kRepr = dictKeyRepr(k, state, node.line);
+        const existing = pairs.find(([pk]) => pk === kRepr);
+        if (existing) existing[1] = v;
+        else pairs.push([kRepr, v]);
+        return;
+      }
+      const g = node.generators[idx];
+      const items = iterableToRtValues(evalExpr(g.iter, state), state, node.line);
+      for (const item of items) {
+        if (typeof g.target === 'string') {
+          setFrameLocal(compFrame, g.target, item);
+        } else {
+          bindTarget(g.target, item, state);
+        }
+        let keep = true;
+        for (const ifExpr of g.ifs) {
+          if (!truthy(evalExpr(ifExpr, state), state)) {
+            keep = false;
+            break;
+          }
+        }
+        if (keep) runGen(idx + 1);
+      }
+    }
+    runGen(0);
+  } finally {
+    state.frames.pop();
+  }
+  const obj = allocObject('dict', pairs, '');
+  state.heap[obj.id] = obj;
+  obj.repr = formatObject(obj, state);
+  return obj.id;
+}
+
+function evalSetComp(node: any, state: MemoryState): RtValue {
+  const elts: RtValue[] = [];
+  const compFrame: Frame = { name: '<setcomp>', locals: {} };
+  state.frames.push(compFrame);
+  try {
+    function runGen(idx: number): void {
+      if (idx >= node.generators.length) {
+        const v = evalExpr(node.elt, state);
+        const kRepr = dictKeyRepr(v, state, node.line);
+        if (!elts.some((e) => dictKeyRepr(e, state, node.line) === kRepr)) {
+          elts.push(v);
+        }
+        return;
+      }
+      const g = node.generators[idx];
+      const items = iterableToRtValues(evalExpr(g.iter, state), state, node.line);
+      for (const item of items) {
+        if (typeof g.target === 'string') {
+          setFrameLocal(compFrame, g.target, item);
+        } else {
+          bindTarget(g.target, item, state);
+        }
+        let keep = true;
+        for (const ifExpr of g.ifs) {
+          if (!truthy(evalExpr(ifExpr, state), state)) {
+            keep = false;
+            break;
+          }
+        }
+        if (keep) runGen(idx + 1);
+      }
+    }
+    runGen(0);
+  } finally {
+    state.frames.pop();
+  }
+  const obj = allocObject('set', elts, '');
+  state.heap[obj.id] = obj;
+  obj.repr = formatObject(obj, state);
+  return obj.id;
+}
+
+function evalFString(node: any, state: MemoryState): RtValue {
+  let result = '';
+  for (const part of node.parts) {
+    if (part.kind === 'literal') {
+      result += part.value;
+    } else {
+      const val = evalExpr(part.value, state);
+      result += printArg(val, state);
+    }
+  }
+  return allocString(result, state);
+}

@@ -4,6 +4,8 @@
  */
 
 import { spawn, spawnSync } from 'child_process';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export interface PythonExecutable {
   command: string;
@@ -29,6 +31,11 @@ export function findPython(): PythonExecutable | null {
   }
 
   const candidates: Array<{ command: string; args: string[] }> = [];
+
+  const localToolsPy = path.resolve(__dirname, '../../.tools/python/python.exe');
+  if (fs.existsSync(localToolsPy)) {
+    candidates.push({ command: localToolsPy, args: [] });
+  }
 
   if (process.env.PYTHON_BIN) {
     candidates.push({ command: process.env.PYTHON_BIN, args: [] });

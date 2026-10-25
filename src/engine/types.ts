@@ -92,6 +92,7 @@ export interface MemoryState {
 export type TokenType =
   | 'NUMBER'
   | 'STRING'
+  | 'FSTRING'
   | 'NAME'
   | 'OP'
   | 'NEWLINE'
@@ -294,7 +295,7 @@ export interface IfNode extends BaseNode {
 /** `for <target> in <iterable>:` */
 export interface ForNode extends BaseNode {
   kind: 'For';
-  target: string;
+  target: string | AstNode;
   iterable: AstNode;
   body: AstNode[];
   elseBody?: AstNode[] | null;
@@ -324,6 +325,46 @@ export interface WithNode extends BaseNode {
   items: WithItem[];
   body: AstNode[];
   isAsync?: boolean;
+}
+
+
+export interface ComprehensionClause {
+  target: AstNode;
+  iter: AstNode;
+  ifs: AstNode[];
+}
+
+export interface ListCompNode extends BaseNode {
+  kind: 'ListComp';
+  elt: AstNode;
+  generators: ComprehensionClause[];
+}
+
+export interface DictCompNode extends BaseNode {
+  kind: 'DictComp';
+  key: AstNode;
+  value: AstNode;
+  generators: ComprehensionClause[];
+}
+
+export interface SetCompNode extends BaseNode {
+  kind: 'SetComp';
+  elt: AstNode;
+  generators: ComprehensionClause[];
+}
+
+export type FStringPart = { kind: 'literal'; value: string } | { kind: 'expr'; value: AstNode };
+
+export interface FStringNode extends BaseNode {
+  kind: 'FString';
+  parts: FStringPart[];
+}
+
+export interface ClassDefNode extends BaseNode {
+  kind: 'ClassDef';
+  name: string;
+  bases: AstNode[];
+  body: AstNode[];
 }
 
 export type AstNode =
@@ -362,7 +403,12 @@ export type AstNode =
   | WhileNode
   | BreakNode
   | ContinueNode
-  | WithNode;
+  | WithNode
+  | ListCompNode
+  | DictCompNode
+  | SetCompNode
+  | FStringNode
+  | ClassDefNode;
 
 /* —— Goals / checks —— */
 
