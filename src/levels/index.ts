@@ -21,6 +21,15 @@ import { series as threading } from './threading';
 import { series as mutation } from './mutation';
 import { series as functions } from './functions';
 import { series as plotting } from './plotting';
+import { series as slicing } from './slicing';
+import { series as recursion } from './recursion';
+import { series as closures } from './closures';
+import { series as regex } from './regex';
+import { series as typingPydantic } from './typing-pydantic';
+import { series as docstrings } from './docstrings';
+import { series as testingPytest } from './testing-pytest';
+import { series as sqlalchemy } from './sqlalchemy';
+import { series as production } from './production';
 
 /**
  * All series, in teaching order.
@@ -48,9 +57,18 @@ export const sequences: Sequence[] = [
   ...functional,
   ...numpy,
   ...pandas,
+  ...slicing,
+  ...recursion,
+  ...closures,
+  ...docstrings,
+  ...regex,
+  ...typingPydantic,
+  ...testingPytest,
   ...asyncio,
   ...threading,
+  ...sqlalchemy,
   ...plotting,
+  ...production,
 ];
 
 /**

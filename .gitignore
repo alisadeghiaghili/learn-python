@@ -5,3 +5,5 @@ output/
 .DS_Store
 *.log
 .claude/launch.json
+__pycache__/
+*.pyc

@@ -46,7 +46,7 @@ Out of pure simulator scope: arbitrary C-extensions and metaclasses. Material re
 src/engine/    simulated Python runtime (tokenizer, parser, evaluator, memory,
                session) + modular libraries (numpy, pandas, asyncio, threading, matplotlib)
                + goal checks (checks.ts)
-src/levels/    16-series / 78-level catalog + per-level goals, par, solutions
+src/levels/    25-series / 123-level catalog + per-level goals, par, solutions
 src/ui/        app shell, memory canvas, plot board, RAM board, REPL, dialog, script editor
 src/i18n/      trilingual translations (English, German, Farsi)
 tests/         engine unit tests, visualizer tests, and CPython differential harness

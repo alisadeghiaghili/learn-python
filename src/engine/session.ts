@@ -23,6 +23,7 @@ export interface Session {
   liveIds: () => string[];
   display: (v: RtValue) => string;
   reset: () => MemoryState;
+  setState: (newState: MemoryState) => void;
 }
 
 /**
@@ -60,6 +61,9 @@ export function createSession(): Session {
       resetObjectIds();
       state = createModuleState();
       return state;
+    },
+    setState(newState: MemoryState): void {
+      state = newState;
     },
   };
 }

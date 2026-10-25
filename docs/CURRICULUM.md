@@ -225,7 +225,7 @@ through it to *see* each iteration change the canvas.
 
 ## 3. The catalog (current)
 
-**78 levels across 16 series.** Series are in teaching order. `band` is the
+**123 levels across 25 series.** Series are in teaching order. `band` is the
 level's ELI band.
 
 The course now opens with **pure Python from zero** — `print`, values, names,
@@ -247,12 +247,21 @@ the aliasing and copy series that mutate lists.
 | `mutation` | Mutation & Methods | 4 |
 | `aliasing` | Aliasing & Copy | 4 |
 | `copy-semantics` | Copy Semantics | 3 |
+| `slicing` | Slicing & Strides | 5 |
+| `recursion` | Recursion & Call Stack | 5 |
 | `iterators` | Iterators & Iterables | 4 |
+| `closures` | Closures & Generators | 5 |
 | `functional` | Defaults & Functional | 4 |
 | `numpy` | NumPy: Buffers & Views | 5 |
 | `pandas` | Pandas: Tables as windows over a buffer | 5 |
+| `regex` | Regular Expressions | 5 |
+| `typing-pydantic` | Type Annotations & Pydantic | 5 |
+| `docstrings` | Docstrings & Doctests | 5 |
+| `testing-pytest` | Testing with pytest | 5 |
+| `sqlalchemy` | SQLAlchemy & ORM Identity Map | 5 |
 | `asyncio` | Asyncio: Coroutines, Tasks & the Event Loop | 5 |
 | `threading` | Threading: Threads, Shared State & the Data Race | 5 |
+| `production` | Production Engineering | 5 |
 | `plotting` | Plotting & Capstone | 3 |
 
 ### Foundations (from zero)
@@ -359,6 +368,26 @@ learner scrubs the recorded frames with the board's transport controls (⏮ ◀ 
 | `deep-copy-independence` | eli15 | Deep copy |
 | `shared-child-mutation` | eli15 | The shared child mutates both |
 
+**`slicing` — Slicing & Strides**
+
+| id | band | name |
+|----|------|------|
+| `slice-start-stop` | eli10 | Slice start and stop |
+| `slice-step` | eli10 | Step strides |
+| `slice-negative-reverse` | eli15 | Negative strides and reversal |
+| `slice-assignment` | eli20 | In-place slice assignment |
+| `slice-object-vs-view` | eliphd | Slice objects and views |
+
+**`recursion` — Recursion & Call Stack**
+
+| id | band | name |
+|----|------|------|
+| `recursion-base-case` | eli10 | Recursive base case |
+| `recursion-countdown` | eli10 | Countdown frames |
+| `recursion-call-stack` | eli15 | Call stack unwinding |
+| `recursion-accumulator` | eli20 | Accumulator recursion |
+| `recursion-depth-limit` | eliphd | Recursion depth limit |
+
 **`iterators` — Iterators & Iterables**
 
 | id | band | name |
@@ -367,6 +396,16 @@ learner scrubs the recorded frames with the board's transport controls (⏮ ◀ 
 | `iter-next` | eli10 | Advance with `next()` |
 | `iter-independence` | eli15 | Two iterators, one list |
 | `iter-exhaust` | eli15 | Exhaust the iterator |
+
+**`closures` — Closures & Generators**
+
+| id | band | name |
+|----|------|------|
+| `closure-inner-function` | eli10 | Inner functions |
+| `closure-state-capture` | eli15 | Capturing state in a closure |
+| `generator-function` | eli15 | Generator function with yield |
+| `generator-expression` | eli20 | Generator expressions |
+| `lazy-vs-eager-memory` | eliphd | Lazy generator vs eager list |
 
 **`functional` — Defaults & Functional**
 
@@ -407,6 +446,56 @@ learner scrubs the recorded frames with the board's transport controls (⏮ ◀ 
 | `pd-iloc-view` | eli20 | A row-slice is a view |
 | `pd-copy-independent` | eliphd | Capstone: view vs copy |
 
+**`regex` — Regular Expressions**
+
+| id | band | name |
+|----|------|------|
+| `re-match-literal` | eli10 | Literal string matching |
+| `re-search-digits` | eli10 | Searching patterns and character classes |
+| `re-capture-groups` | eli15 | Capture groups and extraction |
+| `re-sub-replace` | eli15 | Search and replace with re.sub |
+| `re-flags-multiline` | eli20 | Multiline matching and compiled patterns |
+
+**`typing-pydantic` — Type Annotations & Pydantic**
+
+| id | band | name |
+|----|------|------|
+| `typing-type-hints` | eli10 | Type annotations |
+| `typing-generic-types` | eli15 | Generic collections and Optional |
+| `pydantic-basic-model` | eli15 | Pydantic BaseModel schema |
+| `pydantic-validation-error` | eli20 | Runtime validation errors |
+| `pydantic-nested-model` | eliphd | Nested Pydantic models |
+
+**`docstrings` — Docstrings & Doctests**
+
+| id | band | name |
+|----|------|------|
+| `docstring-pep257` | eli10 | PEP 257 docstrings |
+| `docstring-access` | eli10 | Accessing __doc__ at runtime |
+| `docstring-google-style` | eli15 | Google-style docstrings |
+| `docstring-numpy-style` | eli15 | NumPy-style docstrings |
+| `docstring-doctest` | eli20 | Doctest execution and verification |
+
+**`testing-pytest` — Testing with pytest**
+
+| id | band | name |
+|----|------|------|
+| `pytest-assert` | eli10 | Basic pytest assertion |
+| `pytest-mock` | eli15 | Mocking dependencies with unittest.mock |
+| `pytest-fixture` | eli15 | Test fixtures with pytest |
+| `pytest-parametrize` | eli20 | Parametrized test cases |
+| `pytest-exception-test` | eliphd | Testing expected exceptions |
+
+**`sqlalchemy` — SQLAlchemy & ORM Identity Map**
+
+| id | band | name |
+|----|------|------|
+| `sqlalchemy-declarative-model` | eli15 | Declarative Base and ORM mapped models |
+| `sqlalchemy-memory-session` | eli15 | In-memory SQLite and Session creation |
+| `sqlalchemy-add-query` | eli20 | Adding objects and querying through Session |
+| `sqlalchemy-foreign-key` | eli20 | Relationships and foreign keys |
+| `sqlalchemy-identity-map` | eliphd | The ORM Identity Map |
+
 ### Concurrency
 
 **`asyncio` — Asyncio: Coroutines, Tasks & the Event Loop** (the concurrency exemplar)
@@ -428,6 +517,16 @@ learner scrubs the recorded frames with the board's transport controls (⏮ ◀ 
 | `th-race` | eli20 | Two threads, one box: the lost update |
 | `th-lock` | eliphd | Fix the race with a lock |
 | `th-critical-capstone` | eliphd | Capstone: block, wait, and proceed in order |
+
+**`production` — Production Engineering**
+
+| id | band | name |
+|----|------|------|
+| `prod-env-vars` | eli10 | Environment variables and os.environ |
+| `prod-logging` | eli15 | Structured logging with standard library |
+| `prod-fastapi-app` | eli15 | Building a FastAPI application |
+| `prod-fastapi-client` | eli20 | Testing endpoints with TestClient |
+| `prod-dependency-injection` | eliphd | Dependency injection with Depends |
 
 The threading series is the memory-lens answer to "what is a data race?" A
 thread is a call running in its own frame that **shares the module heap** and is

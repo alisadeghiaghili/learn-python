@@ -11,10 +11,10 @@ export default defineConfig({
           if (id.includes('src/levels/')) {
             return 'levels';
           }
-          if (id.includes('src/i18n/de-g2.ts')) {
+          if (id.includes('src/i18n/de-') || id.includes('src/i18n/de.ts')) {
             return 'i18n-de';
           }
-          if (id.includes('src/i18n/fa-g2.ts')) {
+          if (id.includes('src/i18n/fa-') || id.includes('src/i18n/fa.ts')) {
             return 'i18n-fa';
           }
           if (id.includes('src/engine/')) {

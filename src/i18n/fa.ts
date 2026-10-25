@@ -8,6 +8,7 @@ import { faG2 } from './fa-g2';
 import { faG3 } from './fa-g3';
 import { faG4 } from './fa-g4';
 import { faG5 } from './fa-g5';
+import { faG6 } from './fa-g6';
 
 export const fa: Catalog = {
   locale: 'fa',
@@ -189,7 +190,7 @@ export const fa: Catalog = {
     nextAction: (name) => `بعدی: ${name}`,
     browseLevels: 'مشاهده‌ی مراحل',
   },
-  seriesTitles: { ...faG1.seriesTitles, ...faG2.seriesTitles, ...faG3.seriesTitles, ...faG4.seriesTitles, ...faG5.seriesTitles },
-  deepLessons: { ...faG1.deepLessons, ...faG2.deepLessons, ...faG3.deepLessons, ...faG4.deepLessons, ...faG5.deepLessons },
-  levels: { ...faG1.levels, ...faG2.levels, ...faG3.levels, ...faG4.levels, ...faG5.levels },
+  seriesTitles: { ...faG1.seriesTitles, ...faG2.seriesTitles, ...faG3.seriesTitles, ...faG4.seriesTitles, ...faG5.seriesTitles, ...faG6.seriesTitles },
+  deepLessons: { ...faG1.deepLessons, ...faG2.deepLessons, ...faG3.deepLessons, ...faG4.deepLessons, ...faG5.deepLessons, ...faG6.deepLessons },
+  levels: { ...faG1.levels, ...faG2.levels, ...faG3.levels, ...faG4.levels, ...faG5.levels, ...faG6.levels },
 };

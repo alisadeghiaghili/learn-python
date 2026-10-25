@@ -8,6 +8,7 @@ import { deG2 } from './de-g2';
 import { deG3 } from './de-g3';
 import { deG4 } from './de-g4';
 import { deG5 } from './de-g5';
+import { deG6 } from './de-g6';
 
 export const de: Catalog = {
   locale: 'de',
@@ -189,7 +190,7 @@ Erst wenn du echtes Python schreiben kannst, zeigt der Kurs *wie der Computer de
     nextAction: (name) => `Weiter: ${name}`,
     browseLevels: 'Level durchsuchen',
   },
-  seriesTitles: { ...deG1.seriesTitles, ...deG2.seriesTitles, ...deG3.seriesTitles, ...deG4.seriesTitles, ...deG5.seriesTitles },
-  deepLessons: { ...deG1.deepLessons, ...deG2.deepLessons, ...deG3.deepLessons, ...deG4.deepLessons, ...deG5.deepLessons },
-  levels: { ...deG1.levels, ...deG2.levels, ...deG3.levels, ...deG4.levels, ...deG5.levels },
+  seriesTitles: { ...deG1.seriesTitles, ...deG2.seriesTitles, ...deG3.seriesTitles, ...deG4.seriesTitles, ...deG5.seriesTitles, ...deG6.seriesTitles },
+  deepLessons: { ...deG1.deepLessons, ...deG2.deepLessons, ...deG3.deepLessons, ...deG4.deepLessons, ...deG5.deepLessons, ...deG6.deepLessons },
+  levels: { ...deG1.levels, ...deG2.levels, ...deG3.levels, ...deG4.levels, ...deG5.levels, ...deG6.levels },
 };

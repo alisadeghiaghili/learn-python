@@ -461,6 +461,8 @@ export type EliBand = 'eli5' | 'eli10' | 'eli15' | 'eli20' | 'eliphd';
 export interface Level {
   id: string;
   name: string;
+  /** Execution lane: lightweight simulator (sim, default) or real Python (pyodide). */
+  engine?: 'sim' | 'pyodide';
   /** The ELI band this level teaches on (first-class curriculum attribute). */
   eli: EliBand;
   /** One-line objective shown in the dock. */

@@ -19,6 +19,7 @@ import { escapeHtml, renderInline, renderMarkdown, showModal, type ModalSpec } f
 import { startUiTour, uiHelpModalHtml } from './ui-help';
 import { formatVisitorCount, startVisitorCounter } from './visitor-counter';
 import { getLocale, LOCALES, localizeLevel, localizeSequence, setLocale, ui } from '../i18n';
+import { runPyodide } from '../engine/pyodide/lane';
 import type { Locale } from '../i18n';
 import brandLogoUrl from '../../assets/lp5-logo.svg';
 
@@ -390,7 +391,14 @@ export class App {
     this.session.reset();
     if (level.start.trim()) {
       try {
-        this.session.run(level.start);
+        if (level.engine === 'pyodide') {
+          void runPyodide(level.start).then((pyState) => {
+            this.session.setState(pyState);
+            this.renderBoards();
+          });
+        } else {
+          this.session.run(level.start);
+        }
       } catch (err) {
         this.terminal.push('err', err instanceof Error ? err.message : String(err));
       }
@@ -502,7 +510,7 @@ export class App {
 
   /* —— Execution & verification —— */
 
-  private executeCode(raw: string): void {
+  private async executeCode(raw: string): Promise<void> {
     const source = raw.replace(/\s+$/, '');
     if (!source.trim()) return;
 
@@ -523,7 +531,12 @@ export class App {
     try {
       this.stepIndex = null; // a fresh run shows the final state, not an old step
       const before = this.session.state.stdout.length;
-      this.session.run(source);
+      if (this.level?.engine === 'pyodide') {
+        const pyState = await runPyodide(source);
+        this.session.setState(pyState);
+      } else {
+        this.session.run(source);
+      }
       const newOut = this.session.state.stdout.slice(before);
       for (const line of newOut) this.terminal.push('out', line);
       this.statementsUsed += countStatements(source);

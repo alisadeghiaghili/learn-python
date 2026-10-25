@@ -1,6 +1,6 @@
 # learn-python
 
-An interactive **Python memory-model** visualizer, sandbox, and 78-level challenge
+An interactive **Python memory-model** visualizer, sandbox, and 123-level challenge
 course — where you watch what happens in RAM, not just read about it.
 
 **Live:** https://alisadeghiaghili.github.io/learn-python/
@@ -19,7 +19,7 @@ of those questions *visible*.
 
 ## The course
 
-**78 levels across 16 series, in three languages (English, German, Farsi),**
+**123 levels across 25 series, in three languages (English, German, Farsi),**
 starting from zero and ramping to a capstone. Each level carries an **ELI band**
 (`ELI5` → `ELI-PHD`) so you know how deep it goes, and the data/concurrency series
 have a **deep lesson** — the full ELI5→ELI-PHD ramp with inline diagrams.
@@ -30,12 +30,18 @@ First Steps  →  Decisions  →  Repeating  →  Functions & Frames
         ↓ the memory model arrives
 Names & Bindings  →  Containers in Memory  →  Mutation & Methods
    →  Aliasing & Copy  →  Copy Semantics (shallow vs deep)
-   →  Iterators & Iterables  →  Defaults & Functional (defaultdict, map, filter)
-        ↓ the data libraries
+   →  Slicing & Strides  →  Recursion & Call Stack
+   →  Iterators & Iterables  →  Closures & Generators
+   →  Defaults & Functional (defaultdict, map, filter)
+        ↓ the data libraries & ecosystem
 NumPy: Buffers & Views  →  Pandas: Tables as windows over a buffer
-        ↓ concurrency
+   →  Regular Expressions  →  Type Annotations & Pydantic
+   →  Docstrings & Doctests  →  Testing with pytest
+   →  SQLAlchemy & ORM Identity Map
+        ↓ concurrency & production
 Asyncio (coroutines, tasks, the event loop)
    →  Threading (shared state, the data race, locks)
+   →  Production Engineering (env vars, logging, FastAPI)
         ↓
 Plotting & Capstone
 ```
@@ -77,7 +83,7 @@ npm run dev      # → http://127.0.0.1:5173
 ## Test
 
 ```bash
-npm test         # vitest run — 292 passing tests including differential CPython tests
+npm test         # vitest run — 399 passing tests including differential CPython tests
 npm run build    # type-check (tsc --noEmit) + production build to dist/
 ```
 
@@ -88,7 +94,7 @@ Free-play mode: type Python-subset statements. Meta-commands:
 | Command | Effect |
 |---------|--------|
 | `help` | the subset + meta overview |
-| `levels` | list the 78 levels / 16 series |
+| `levels` | list the 123 levels / 25 series |
 | `level <id>` | load a level (e.g. `level first-name`) |
 | `lesson` | open the current level's lesson |
 | `goal` / `guide` | focus the right-hand guide panel |
@@ -145,7 +151,7 @@ their *memory model*, not their full API:
 src/engine/    the simulated runtime — tokenizer, parser, evaluator, memory model,
                record-replay stepper — plus goal checks (checks.ts), the
                "TreeCompare" analogue
-src/levels/    the 16-series / 78-level catalog: one file per series, each with
+src/levels/    the 25-series / 123-level catalog: one file per series, each with
                goals, par, solutions, and deep lessons
 src/ui/        app shell, memory canvas, RAM board, plot board, schematic (SVG)
                engine, REPL, dialogs, script editor

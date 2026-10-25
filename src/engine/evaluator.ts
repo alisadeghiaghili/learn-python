@@ -928,6 +928,20 @@ function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
   if (target.kind === 'Slice') {
     const objId = evalExpr(target.object, state);
     const obj = state.heap[objId as string];
+    if (obj && obj.type === 'list') {
+      const raw = obj.value as RtValue[];
+      const len = raw.length;
+      let s = target.start ? Number(evalExpr(target.start, state)) : 0;
+      let e = target.stop ? Number(evalExpr(target.stop, state)) : len;
+      if (s < 0) s = Math.max(0, s + len);
+      if (e < 0) e = Math.max(0, e + len);
+      s = Math.min(len, Math.max(0, s));
+      e = Math.min(len, Math.max(0, e));
+      const rhsItems = iterableToRtValues(value, state, target.line);
+      raw.splice(s, e - s, ...rhsItems);
+      obj.repr = formatObject(obj, state);
+      return;
+    }
     if (obj && obj.type === 'ndarray') {
       const v = obj.value as NdarrayValue;
       const s = target.start ? Number(evalExpr(target.start, state)) : 0;
@@ -1408,6 +1422,29 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
         throw new PyTypeError(`ord() expected a character, but string of length ${codePoints.length} found (line ${node.line})`);
       }
       return codePoints[0]!.codePointAt(0)!;
+    }
+    if (name === 'slice') {
+      let s: RtValue = null;
+      let e: RtValue = null;
+      let st: RtValue = null;
+      if (args.length === 1) {
+        e = args[0]!;
+      } else if (args.length === 2) {
+        s = args[0]!;
+        e = args[1]!;
+      } else if (args.length === 3) {
+        s = args[0]!;
+        e = args[1]!;
+        st = args[2]!;
+      } else {
+        throw new PyTypeError(`slice expected at most 3 arguments, got ${args.length} (line ${node.line})`);
+      }
+      const sRepr = s === null ? 'None' : String(s);
+      const eRepr = e === null ? 'None' : String(e);
+      const stRepr = st === null ? 'None' : String(st);
+      const obj = allocObject('slice', { start: s, stop: e, step: st }, `slice(${sRepr}, ${eRepr}, ${stRepr})`);
+      state.heap[obj.id] = obj;
+      return obj.id;
     }
     const fnId = lookupName(name, state, node.line);
     return callUserFunction(fnId, args, state, node.line, kwargs);
@@ -2415,6 +2452,10 @@ function compareOp(op: string, left: RtValue, right: RtValue, state: MemoryState
 function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: number): RtValue {
   const obj = state.heap[objId as string];
   if (!obj) throw new PyTypeError(`object is not subscriptable (line ${line})`);
+  if (typeof index === 'string' && state.heap[index]?.type === 'slice') {
+    const sl = state.heap[index].value as { start: RtValue; stop: RtValue; step: RtValue };
+    return sliceGet(objId, sl.start, sl.stop, sl.step, state, line);
+  }
 
   if (obj.type === 'dataframe') {
     return dataFrameGetColumn(objId as string, index, state, line);
@@ -2480,21 +2521,32 @@ function sliceGet(
   } else if (Array.isArray(obj.value)) {
     len = (obj.value as RtValue[]).length;
   }
-  const s = start === null ? 0 : Number(start);
-  const e = stop === null ? len : Number(stop);
   const st = step === null ? 1 : Number(step);
+  let s: number;
+  let e: number;
+  if (st > 0) {
+    s = start === null ? 0 : Number(start);
+    e = stop === null ? len : Number(stop);
+    if (s < 0) s = Math.max(0, s + len);
+    if (e < 0) e = Math.max(0, e + len);
+    s = Math.min(len, Math.max(0, s));
+    e = Math.min(len, Math.max(0, e));
+  } else {
+    s = start === null ? len - 1 : Number(start);
+    e = stop === null ? -1 : Number(stop);
+    if (s < 0) s = s + len;
+    if (stop !== null && e < 0) e = e + len;
+  }
 
   if (obj.type === 'list' || obj.type === 'tuple') {
     const raw = obj.value as RtValue[];
-    let elts: RtValue[] = [];
-    if (st === 1) {
-      elts = raw.slice(s, e);
-    } else if (st === -1) {
-      const startIdx = start === null ? raw.length - 1 : Number(start);
-      const stopIdx = stop === null ? -1 : Number(stop);
-      for (let i = startIdx; i > stopIdx; i--) elts.push(raw[i]!);
-    } else if (st > 0) {
+    const elts: RtValue[] = [];
+    if (st > 0) {
       for (let i = s; i < e; i += st) elts.push(raw[i]!);
+    } else {
+      for (let i = s; i > e; i += st) {
+        if (i >= 0 && i < raw.length) elts.push(raw[i]!);
+      }
     }
     const out = allocObject(obj.type, elts, '');
     state.heap[out.id] = out;
@@ -2509,14 +2561,13 @@ function sliceGet(
   }
   if (obj.type === 'str') {
     const sStr = obj.value as string;
-    if (st === 1) return allocString(sStr.slice(s, e), state);
     let res = '';
-    if (st === -1) {
-      const startIdx = start === null ? sStr.length - 1 : Number(start);
-      const stopIdx = stop === null ? -1 : Number(stop);
-      for (let i = startIdx; i > stopIdx; i--) res += sStr[i]!;
-    } else if (st > 0) {
+    if (st > 0) {
       for (let i = s; i < e; i += st) res += sStr[i]!;
+    } else {
+      for (let i = s; i > e; i += st) {
+        if (i >= 0 && i < sStr.length) res += sStr[i]!;
+      }
     }
     return allocString(res, state);
   }

@@ -9,6 +9,7 @@
 import { test, expect } from 'vitest';
 
 import { runFresh, snapshot } from '../src/engine/session';
+import { runPyodideSync } from '../src/engine/pyodide/lane';
 import { checkGoal } from '../src/engine/checks';
 import { allLevels, sequences } from '../src/levels/index';
 import { countStatements } from '../src/ui/app';
@@ -71,7 +72,7 @@ test('every series with a deep lesson ramps through the core ELI bands', () => {
 test('every level has a solution that meets the goal within par', () => {
   for (const level of allLevels()) {
     const source = level.start.trim() ? level.start + '\n' + level.solution : level.solution;
-    const state = runFresh(source);
+    const state = level.engine === 'pyodide' ? runPyodideSync(source) : runFresh(source);
     const result = checkGoal(level.goal, snapshot(state), state);
     expect(result.ok, `${level.id}: ${result.message}`).toBe(true);
     const used = countStatements(level.solution);
