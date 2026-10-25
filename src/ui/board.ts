@@ -101,7 +101,8 @@ function plotSvg(spec: PlotSpec): string {
     ? `<text x="${(px0 + px1) / 2}" y="20" fill="${PLOT.ink}" font-size="13" text-anchor="middle" font-family="${PLOT_SANS}" font-weight="600">${escapeHtml(spec.title)}</text>`
     : '';
 
-  return `<svg class="plot-svg" viewBox="0 0 ${W} ${H}" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${escapeHtml(spec.title || spec.kind)}">${title}${grid}${axes}${ticks}${series}</svg>`;
+  const summary = `${spec.title ? spec.title + ': ' : ''}${spec.kind} plot with ${pts.length} points, x from ${fmtTick(xmin)} to ${fmtTick(xmax)}, y from ${fmtTick(ymin)} to ${fmtTick(ymax)}`;
+  return `<svg class="plot-svg" viewBox="0 0 ${W} ${H}" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${escapeHtml(summary)}"><title>${escapeHtml(summary)}</title><desc>${escapeHtml(summary)}</desc>${title}${grid}${axes}${ticks}${series}</svg>`;
 }
 
 export type BoardTab = 'memory' | 'plot' | 'ram';
@@ -345,57 +346,82 @@ export class BoardView {
 
   /** Update accessible text alternatives and aria-live region. */
   updateAccessibility(state?: MemoryState): void {
-    const currentState = state ?? this.trace[this.stepIndex];
-    if (!currentState || !this.liveRegion || !this.textAlt) return;
+    this.describeMemory(state);
+  }
+
+  /** Produce and announce a structured text summary of the current memory state. */
+  describeMemory(state?: MemoryState): string {
+    const currentState = state ?? (this.trace.length > 0 ? this.trace[this.stepIndex] : undefined);
+    if (!currentState) {
+      const msg = 'Memory is empty.';
+      if (this.liveRegion) this.liveRegion.textContent = msg;
+      if (this.textAlt) this.textAlt.textContent = msg;
+      return msg;
+    }
 
     const frameLines = currentState.frames.map((f) => {
-      const vars = Object.entries(f.locals)
-        .map(([k, v]) => `${k} = ${v}`)
-        .join(', ');
+      const vars = Object.entries(f.locals).map(([k, v]) => {
+        if (typeof v === 'string' && currentState.heap[v]) {
+          const obj = currentState.heap[v];
+          const aliases = Object.entries(f.locals)
+            .filter(([otherK, otherV]) => otherK !== k && otherV === v)
+            .map(([otherK]) => otherK);
+          const aliasNote = aliases.length > 0 ? ` (same object as ${aliases.join(', ')})` : '';
+          return `${k} → ${obj.type} ${obj.id} [${obj.repr}]${aliasNote}`;
+        }
+        return `${k} → ${v === null ? 'None' : String(v)}`;
+      }).join('; ');
       return `Frame ${f.name}: ${vars || 'empty'}`;
     });
 
     const heapCount = Object.keys(currentState.heap).length;
-    const summary = `Step ${this.stepIndex + 1} of ${Math.max(1, this.trace.length)}. ${frameLines.join('. ')}. Heap has ${heapCount} object${heapCount === 1 ? '' : 's'}.`;
+    const stepPrefix = this.trace.length > 1 ? `Step ${this.stepIndex + 1} of ${this.trace.length}. ` : '';
+    const summary = `${stepPrefix}${frameLines.join('. ')}. Heap has ${heapCount} object${heapCount === 1 ? '' : 's'}.`;
 
-    this.liveRegion.textContent = summary;
-    this.textAlt.textContent = summary;
+    if (this.liveRegion) this.liveRegion.textContent = summary;
+    if (this.textAlt) this.textAlt.textContent = summary;
+    return summary;
   }
 
   private render(): void {
     const hasPlot = this.plots.length > 0;
     this.root.innerHTML = `
       <div class="board-header">
-        <div class="board-tabs" role="tablist">
-          <button type="button" class="board-tab${this.currentTab === 'memory' ? ' is-active' : ''}" data-tab="memory" role="tab" aria-selected="${this.currentTab === 'memory'}">
+        <div class="board-tabs" role="tablist" aria-label="Visualizer views">
+          <button type="button" class="board-tab${this.currentTab === 'memory' ? ' is-active' : ''}" data-tab="memory" id="tab-memory" role="tab" aria-selected="${this.currentTab === 'memory'}" aria-controls="pane-memory" tabindex="${this.currentTab === 'memory' ? '0' : '-1'}">
             <span>Memory</span>
             <span class="tab-badge">stack · heap</span>
           </button>
-          <button type="button" class="board-tab${this.currentTab === 'plot' ? ' is-active' : ''}" data-tab="plot" role="tab" aria-selected="${this.currentTab === 'plot'}">
+          <button type="button" class="board-tab${this.currentTab === 'plot' ? ' is-active' : ''}" data-tab="plot" id="tab-plot" role="tab" aria-selected="${this.currentTab === 'plot'}" aria-controls="pane-plot" tabindex="${this.currentTab === 'plot' ? '0' : '-1'}">
             <span>Plot</span>
             ${hasPlot ? '<span class="tab-badge ok">●</span>' : ''}
           </button>
-          <button type="button" class="board-tab${this.currentTab === 'ram' ? ' is-active' : ''}" data-tab="ram" role="tab" aria-selected="${this.currentTab === 'ram'}">
+          <button type="button" class="board-tab${this.currentTab === 'ram' ? ' is-active' : ''}" data-tab="ram" id="tab-ram" role="tab" aria-selected="${this.currentTab === 'ram'}" aria-controls="pane-ram" tabindex="${this.currentTab === 'ram' ? '0' : '-1'}">
             <span>RAM</span>
             <span class="tab-badge">addr · ref</span>
           </button>
         </div>
-        <button type="button" class="scalar-toggle-chip" id="scalar-toggle-btn" aria-pressed="${this.showScalarsOnHeap}">
-          ${this.showScalarsOnHeap ? 'Showing all on heap' : 'Inline scalars'}
-        </button>
+        <div class="board-controls">
+          <button type="button" class="describe-memory-btn" id="describe-memory-btn" aria-label="Describe current memory state">
+            Describe memory
+          </button>
+          <button type="button" class="scalar-toggle-chip" id="scalar-toggle-btn" aria-pressed="${this.showScalarsOnHeap}">
+            ${this.showScalarsOnHeap ? 'Showing all on heap' : 'Inline scalars'}
+          </button>
+        </div>
       </div>
       <div class="board-body">
-        <div class="board-pane${this.currentTab === 'memory' ? ' is-active' : ''}" data-pane="memory">
+        <div class="board-pane${this.currentTab === 'memory' ? ' is-active' : ''}" data-pane="memory" id="pane-memory" role="tabpanel" aria-labelledby="tab-memory" tabindex="0">
           <div class="canvas-wrap">
             <svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python memory visualization canvas"></svg>
             <div class="sr-only live-desc" id="board-live-region" aria-live="polite"></div>
             <div class="sr-only text-alternative" id="board-text-alt"></div>
           </div>
         </div>
-        <div class="board-pane${this.currentTab === 'plot' ? ' is-active' : ''}" data-pane="plot">
-          <div class="plot-stage" id="plot-stage"></div>
+        <div class="board-pane${this.currentTab === 'plot' ? ' is-active' : ''}" data-pane="plot" id="pane-plot" role="tabpanel" aria-labelledby="tab-plot" tabindex="0">
+          <div class="plot-stage" id="plot-stage" tabindex="0" role="region" aria-label="Data plot view"></div>
         </div>
-        <div class="board-pane${this.currentTab === 'ram' ? ' is-active' : ''}" data-pane="ram">
+        <div class="board-pane${this.currentTab === 'ram' ? ' is-active' : ''}" data-pane="ram" id="pane-ram" role="tabpanel" aria-labelledby="tab-ram" tabindex="0">
           <div class="canvas-wrap"><svg id="ram-canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python RAM byte layout view"></svg></div>
         </div>
       </div>
@@ -444,6 +470,34 @@ export class BoardView {
     this.btnLast.addEventListener('click', () => this.stepLast());
     this.stepSlider.addEventListener('input', () => this.goToStep(this.stepSlider.valueAsNumber));
     this.scalarToggleBtn.addEventListener('click', () => this.toggleScalars());
+
+    const describeBtn = this.root.querySelector('#describe-memory-btn') as HTMLButtonElement | null;
+    describeBtn?.addEventListener('click', () => this.describeMemory());
+
+    const tabs: BoardTab[] = ['memory', 'plot', 'ram'];
+    const tabBtns = [this.memoryTabBtn, this.plotTabBtn, this.ramTabBtn];
+    const tablist = this.root.querySelector('.board-tabs');
+    tablist?.addEventListener('keydown', (e) => {
+      const evt = e as KeyboardEvent;
+      const curIdx = tabs.indexOf(this.currentTab);
+      let nextIdx = -1;
+      if (evt.key === 'ArrowRight' || evt.key === 'ArrowDown') {
+        nextIdx = (curIdx + 1) % tabs.length;
+      } else if (evt.key === 'ArrowLeft' || evt.key === 'ArrowUp') {
+        nextIdx = (curIdx - 1 + tabs.length) % tabs.length;
+      } else if (evt.key === 'Home') {
+        nextIdx = 0;
+      } else if (evt.key === 'End') {
+        nextIdx = tabs.length - 1;
+      }
+      if (nextIdx !== -1) {
+        evt.preventDefault();
+        const nextTab = tabs[nextIdx]!;
+        this.setTab(nextTab);
+        const nextBtn = tabBtns[nextIdx];
+        nextBtn?.focus();
+      }
+    });
 
     this.root.querySelectorAll<HTMLButtonElement>('.step-speed-btn').forEach((btn) => {
       btn.addEventListener('click', () => {

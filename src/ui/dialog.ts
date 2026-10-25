@@ -202,19 +202,20 @@ let activeDismiss: (() => void) | undefined;
 export function showModal(spec: ModalSpec): { close: () => void; el: HTMLElement } {
   closeModal();
 
+  const previouslyFocused = (typeof document !== 'undefined' ? document.activeElement : null) as HTMLElement | null;
   const isCelebrate = spec.variant === 'celebrate';
   const overlay = document.createElement('div');
   overlay.className = `overlay${isCelebrate ? ' overlay-celebrate' : ''}`;
-  overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-modal', 'true');
 
+  const modalTitleId = `modal-title-${Math.random().toString(36).slice(2, 9)}`;
   const card = document.createElement('div');
   card.className = `modal${isCelebrate ? ' modal-celebrate' : ''}`;
   card.setAttribute('role', 'dialog');
   card.setAttribute('aria-modal', 'true');
-  card.setAttribute('aria-label', spec.title);
+  card.setAttribute('aria-labelledby', modalTitleId);
 
   const h2 = document.createElement('h2');
+  h2.id = modalTitleId;
   if (isCelebrate) {
     h2.className = 'visually-hidden';
   }
@@ -229,7 +230,35 @@ export function showModal(spec: ModalSpec): { close: () => void; el: HTMLElement
   const footer = document.createElement('div');
   footer.className = 'modal-actions';
 
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Tab') {
+      const focusableSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+      const focusables = Array.from(card.querySelectorAll<HTMLElement>(focusableSelector)).filter((el) => {
+        return !el.hasAttribute('disabled');
+      });
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+  };
+  card.addEventListener('keydown', onKeyDown);
+
   const close = () => {
+    card.removeEventListener('keydown', onKeyDown);
     if (document.body.contains(overlay)) {
       overlay.remove();
     }
@@ -239,6 +268,13 @@ export function showModal(spec: ModalSpec): { close: () => void; el: HTMLElement
     }
     spec.onDismiss?.();
     spec.onClose?.();
+    if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+      try {
+        previouslyFocused.focus();
+      } catch {
+        // ignore
+      }
+    }
   };
 
   const actions = spec.actions && spec.actions.length ? spec.actions : [{ label: 'Close', onClick: () => close() }];
@@ -267,8 +303,14 @@ export function showModal(spec: ModalSpec): { close: () => void; el: HTMLElement
     }
   });
 
-  const firstBtn = footer.querySelector('button');
-  firstBtn?.focus();
+  // Initial focus on the first meaningful control (not bottom Close button if body has interactive items or primary button)
+  const focusableSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const allFocusables = Array.from(card.querySelectorAll<HTMLElement>(focusableSelector));
+  const primaryAction =
+    allFocusables.find((el) => el.classList.contains('primary') || el.classList.contains('btn-primary')) ||
+    body.querySelector<HTMLElement>(focusableSelector) ||
+    footer.querySelector<HTMLElement>('button');
+  primaryAction?.focus();
 
   return {
     close,

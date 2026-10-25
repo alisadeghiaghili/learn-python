@@ -102,7 +102,7 @@ export class TerminalView {
   private wordCycle: string[] = [];
   private wordIdx = 0;
   private wordKey = '';
-  private allowTabExit = false;
+
   private onSubmit: (cmd: string) => void;
   private onOpenEditor: () => void;
 
@@ -204,7 +204,7 @@ export class TerminalView {
     this.inputEl.placeholder = this.hint ? `Next: ${this.hint}` : 'Type Python — help · levels · hint · script';
     this.hintEl.hidden = !this.hint;
     if (this.hint) {
-      this.hintEl.innerHTML = `Next: <code>${escapeHtml(this.hint)}</code> <span class="par-note">· Tab fills the word</span>`;
+      this.hintEl.innerHTML = `Next: <code>${escapeHtml(this.hint)}</code> <span class="par-note">· Ctrl+Space / → fills word</span>`;
     }
     this.syncGhost();
   }
@@ -388,15 +388,11 @@ export class TerminalView {
       return;
     }
     if (e.key === 'Tab') {
-      if (e.shiftKey) {
-        // Shift+Tab exits focus backward without keyboard trap
-        return;
-      }
-      if (this.allowTabExit) {
-        // Esc was pressed: allow Tab to exit focus forward
-        this.allowTabExit = false;
-        return;
-      }
+      // Tab and Shift+Tab move focus naturally without keyboard trap (WCAG 2.1.2)
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.code === 'Space' || e.key === ' ')) {
+      e.preventDefault();
       this.applyTab(e);
       return;
     }
@@ -409,17 +405,22 @@ export class TerminalView {
         this.syncGhost();
         return;
       }
+      if (this.hint && !this.inputEl.value) {
+        e.preventDefault();
+        this.applyTab(e);
+        return;
+      }
     }
     if (e.key === 'Escape') {
       e.preventDefault();
-      this.allowTabExit = true;
+
       this.inputEl.value = '';
       this.wordCycle = [];
       this.wordKey = '';
       this.syncGhost();
       return;
     }
-    this.allowTabExit = false;
+
     if (e.key === 'Enter') {
       e.preventDefault();
       if (document.querySelector('.overlay .modal')) return;

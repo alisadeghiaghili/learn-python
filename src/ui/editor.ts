@@ -143,7 +143,12 @@ export class ScriptEditorView {
       this.toggle(false);
     });
 
+    let allowTabExit = false;
     this.textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        allowTabExit = true;
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
         e.preventDefault();
         const code = this.getCodeToRun('all');
@@ -184,12 +189,18 @@ export class ScriptEditorView {
         return;
       }
       if (e.key === 'Tab') {
+        if (allowTabExit) {
+          allowTabExit = false;
+          return; // Let Tab / Shift+Tab move focus
+        }
         e.preventDefault();
         const start = this.textarea.selectionStart;
         const end = this.textarea.selectionEnd;
         this.textarea.value = this.textarea.value.substring(0, start) + '  ' + this.textarea.value.substring(end);
         this.textarea.selectionStart = this.textarea.selectionEnd = start + 2;
+        return;
       }
+      allowTabExit = false;
     });
   }
 }

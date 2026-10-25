@@ -748,7 +748,7 @@ function addText(parent: SVGElement, x: number, y: number, text: string, fill: s
   t.setAttribute('x', String(x));
   t.setAttribute('y', String(y));
   t.setAttribute('fill', fill);
-  t.setAttribute('font-size', String(size));
+  t.setAttribute('font-size', String(Math.max(12, size)));
   t.setAttribute('text-anchor', anchor);
   t.setAttribute('dominant-baseline', baseline);
   t.setAttribute('font-family', family);

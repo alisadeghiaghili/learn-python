@@ -488,8 +488,9 @@ button.ghost,
 
 .tab-badge {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   background: var(--line);
+  color: var(--ink);
   padding: 1px 6px;
   border-radius: 10px;
 }
@@ -1814,4 +1815,57 @@ button.ghost,
   .level-row .name { grid-area: name; }
   .level-row .par-note { grid-area: par; }
   .level-row .chip { grid-area: chip; justify-self: end; }
+}
+
+/* WCAG 2.2 AA Accessibility enhancements */
+.skip-link {
+  position: absolute;
+  top: -60px;
+  left: 12px;
+  background: var(--amber);
+  color: #0b0f12;
+  padding: 8px 14px;
+  font-family: var(--ui);
+  font-weight: 600;
+  font-size: 13px;
+  border-radius: 4px;
+  z-index: 9999;
+  text-decoration: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: top 0.15s ease;
+}
+.skip-link:focus {
+  top: 12px;
+}
+
+.level-title-h1 {
+  display: inline;
+  font-size: inherit;
+  font-weight: inherit;
+  font-family: inherit;
+  margin: 0;
+  padding: 0;
+}
+
+.board-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.describe-memory-btn {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-family: var(--ui);
+  padding: 2px 8px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.describe-memory-btn:hover,
+.describe-memory-btn:focus-visible {
+  color: var(--ink);
+  border-color: var(--amber);
 }
