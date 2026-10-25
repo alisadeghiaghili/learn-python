@@ -162,6 +162,12 @@ TypeScript, Vite, Vitest. **No backend, no runtime dependency** — the
 "interpreter" is a hand-written subset whose entire memory graph is inspectable in
 the browser.
 
+## Privacy & Offline PWA
+
+- **100% Client-Side:** Code execution, memory state, and level progress remain completely local in your browser (`localStorage`). No user code or personal data is transmitted to any server.
+- **Installable Offline PWA:** A service worker precaches application assets so the course works completely offline after first load.
+- **Anonymous Visitor Counter:** A lightweight, anonymous counter service records unique browser visits without cookies, IP addresses, or personal tracking data. It loads on user interaction and fails silently if blocked or offline.
+
 ## Docs
 
 - [docs/CURRICULUM.md](docs/CURRICULUM.md) — the design doc: the thesis, the

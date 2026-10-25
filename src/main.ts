@@ -13,3 +13,10 @@ const app = new App(root);
 
 // Expose on window for interactive debugging
 (window as unknown as { learnPythonApp: App }).learnPythonApp = app;
+
+// Register offline PWA service worker in supported browser environments
+if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}

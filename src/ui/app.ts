@@ -144,7 +144,14 @@ export class App {
     });
     this.mount();
     this.init();
-    void startVisitorCounter((count) => this.renderVisitors(count));
+    // Load visitor counter on first user interaction or when idle
+    const initCounter = () => {
+      document.removeEventListener('click', initCounter);
+      document.removeEventListener('keydown', initCounter);
+      void startVisitorCounter((count) => this.renderVisitors(count));
+    };
+    document.addEventListener('click', initCounter, { once: true });
+    document.addEventListener('keydown', initCounter, { once: true });
   }
 
   /** Unique-visitor stat in the toolbar; stays hidden until a number is known. */
@@ -505,6 +512,9 @@ export class App {
     }
 
     this.terminal.push('cmd', `>>> ${source.replace(/\n/g, '\n... ')}`);
+    if (this.undoStack.length >= 20) {
+      this.undoStack.shift();
+    }
     this.undoStack.push({
       state: this.session.clone(),
       statementsUsed: this.statementsUsed,

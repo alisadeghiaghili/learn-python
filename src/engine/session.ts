@@ -41,7 +41,11 @@ export function createSession(): Session {
       return snapshot(state);
     },
     clone(): MemoryState {
-      return cloneState(state);
+      const arr = state.trace;
+      delete state.trace;
+      const copy = cloneState(state);
+      state.trace = arr;
+      return copy;
     },
     edges(): RefEdge[] {
       return referenceEdges(state);

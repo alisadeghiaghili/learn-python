@@ -108,7 +108,10 @@ import type {
 export function run(source: string, state: MemoryState): MemoryState {
   try {
     resetMatplotlib();
-    if (traceEnabled) state.trace = [cloneState(state)]; // frame 0: state before running
+    if (traceEnabled) {
+      delete state.trace;
+      state.trace = [cloneState(state)]; // frame 0: state before running
+    }
     const ast = parse(source);
     for (const stmt of ast) {
       if (stmt.line) state.currentLine = stmt.line;
@@ -193,8 +196,9 @@ function recordStep(state: MemoryState, line?: number): void {
   const arr = state.trace;
   if (!arr || arr.length >= TRACE_CAP) return;
   if (line !== undefined) state.currentLine = line;
+  delete state.trace; // temporarily detach to prevent O(N^2) exponential clone slowdown
   const frame = cloneState(state);
-  delete frame.trace; // don't nest the growing array inside every frame
+  state.trace = arr;
   arr.push(frame);
 }
 

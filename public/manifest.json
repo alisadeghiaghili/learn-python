@@ -1,0 +1,18 @@
+{
+  "name": "learn-python",
+  "short_name": "learn-python",
+  "description": "Interactive Python memory model visualizer, sandbox, and challenge levels",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b0f12",
+  "theme_color": "#0b0f12",
+  "icons": [
+    {
+      "src": "assets/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
