@@ -1,0 +1,142 @@
+[
+  {
+    "id": "arithmetic-precedence",
+    "note": "+ * - precedence",
+    "source": "x = 2 + 3 * 4 - 1\nprint(x)",
+    "expected": { "kind": "ok", "text": "13" },
+    "expect": "parity"
+  },
+  {
+    "id": "int-div-mod-pow",
+    "note": "floor div, modulo, power on ints",
+    "source": "print(17 // 5)\nprint(17 % 5)\nprint(2 ** 10)",
+    "expected": { "kind": "ok", "text": "3\n2\n1024" },
+    "expect": "parity"
+  },
+  {
+    "id": "floor-div-neg",
+    "note": "floor division / modulo follow Python (floor) semantics, not C",
+    "source": "print(-7 // 2)\nprint(-7 % 2)",
+    "expected": { "kind": "ok", "text": "-4\n1" },
+    "expect": "parity"
+  },
+  {
+    "id": "float-div",
+    "note": "true division yields a float",
+    "source": "print(7 / 2)",
+    "expected": { "kind": "ok", "text": "3.5" },
+    "expect": "parity"
+  },
+  {
+    "id": "unary-minus",
+    "note": "unary minus binds tighter than *",
+    "source": "print(-5)\nx = -2\nprint(x * 3)",
+    "expected": { "kind": "ok", "text": "-5\n-6" },
+    "expect": "parity"
+  },
+  {
+    "id": "comparison",
+    "note": "ordered and equality comparisons return booleans",
+    "source": "print(3 < 5)\nprint(3 == 4)\nprint(5 >= 5)",
+    "expected": { "kind": "ok", "text": "True\nFalse\nTrue" },
+    "expect": "parity"
+  },
+  {
+    "id": "string-concat-repeat",
+    "note": "str + str concatenates; str * int repeats",
+    "source": "print('ab' + 'cd')\nprint('ab' * 3)",
+    "expected": { "kind": "ok", "text": "abcd\nababab" },
+    "expect": "parity"
+  },
+  {
+    "id": "list-mutate-len",
+    "note": "list.append mutates in place; len reflects it",
+    "source": "a = [1, 2]\na.append(3)\nprint(a)\nprint(len(a))",
+    "expected": { "kind": "ok", "text": "[1, 2, 3]\n3" },
+    "expect": "parity"
+  },
+  {
+    "id": "dict-setitem",
+    "note": "dict item assignment; repr matches CPython",
+    "source": "d = {'k': 1}\nd['k'] = 2\nprint(d)",
+    "expected": { "kind": "ok", "text": "{'k': 2}" },
+    "expect": "parity"
+  },
+  {
+    "id": "string-methods",
+    "note": ".upper() / .lower()",
+    "source": "s = 'Hello'\nprint(s.upper())\nprint(s.lower())",
+    "expected": { "kind": "ok", "text": "HELLO\nhello" },
+    "expect": "parity"
+  },
+  {
+    "id": "for-range-accumulate",
+    "note": "for over range accumulates",
+    "source": "total = 0\nfor i in range(1, 5):\n    total = total + i\nprint(total)",
+    "expected": { "kind": "ok", "text": "10" },
+    "expect": "parity"
+  },
+  {
+    "id": "while-break",
+    "note": "while True + break; nested if",
+    "source": "n = 0\nwhile True:\n    n = n + 1\n    if n >= 3:\n        break\nprint(n)",
+    "expected": { "kind": "ok", "text": "3" },
+    "expect": "parity"
+  },
+  {
+    "id": "if-elif-else",
+    "note": "elif ladder picks the first true branch",
+    "source": "score = 72\nif score >= 90:\n    print('A')\nelif score >= 70:\n    print('B')\nelse:\n    print('C')",
+    "expected": { "kind": "ok", "text": "B" },
+    "expect": "parity"
+  },
+  {
+    "id": "function-return",
+    "note": "def + positional call + return",
+    "source": "def f(a, b):\n    return a + b\nprint(f(2, 3))",
+    "expected": { "kind": "ok", "text": "5" },
+    "expect": "parity"
+  },
+  {
+    "id": "conversions",
+    "note": "bool / int / str builtins match CPython",
+    "source": "print(bool(1))\nprint(bool(0))\nprint(int(5.9))\nprint(str(10))",
+    "expected": { "kind": "ok", "text": "True\nFalse\n5\n10" },
+    "expect": "parity"
+  },
+  {
+    "id": "membership-in",
+    "note": "in over a list",
+    "source": "xs = [10, 20, 30]\nprint(20 in xs)\nprint(99 in xs)",
+    "expected": { "kind": "ok", "text": "True\nFalse" },
+    "expect": "parity"
+  },
+  {
+    "id": "tuple-len",
+    "note": "tuple repr and len",
+    "source": "t = (1, 2, 3)\nprint(t)\nprint(len(t))",
+    "expected": { "kind": "ok", "text": "(1, 2, 3)\n3" },
+    "expect": "parity"
+  },
+  {
+    "id": "abs-min-max",
+    "note": "abs / min / max over a list",
+    "source": "print(abs(-4))\nprint(min([3, 1, 2]))\nprint(max([3, 1, 2]))",
+    "expected": { "kind": "ok", "text": "4\n1\n3" },
+    "expect": "parity"
+  },
+  {
+    "id": "drift-iadd",
+    "note": "CPython list.__iadd__ extends in place, so the alias b sees [1, 2]; the simulator rebinds a to a new list, so b stays [1]. (Phase 3: __iadd__/__imul__)",
+    "source": "a = [1]\nb = a\na += [2]\nprint(b)",
+    "expected": { "kind": "ok", "text": "[1, 2]" },
+    "expect": "drift"
+  },
+  {
+    "id": "drift-unbound",
+    "note": "CPython pre-scopes x as local inside bump() (assigned, not declared global), so reading x before that assignment raises UnboundLocalError. The simulator has no local pre-scope (lookupName walks all frames), so the read falls through to the module x and prints 1. (Phase 2: scope)",
+    "source": "x = 1\ndef bump():\n    print(x)\n    x = 2\nbump()",
+    "expected": { "kind": "exc", "excType": "UnboundLocalError" },
+    "expect": "drift"
+  }
+]

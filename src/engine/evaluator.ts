@@ -12,6 +12,7 @@ import type {
   FunctionCode,
   HeapObject,
   MemoryState,
+  PlotSpec,
   RtValue,
 } from './types';
 
@@ -572,6 +573,14 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
     if (name === 'bool') {
       return truthy(args[0], state);
     }
+    if (name === 'abs') {
+      return Math.abs(derefNumber(args[0], state));
+    }
+    if (name === 'min' || name === 'max') {
+      const nums = readNumberSeries(args[0], state);
+      if (nums.length === 0) throw new Error(`ValueError: ${name}() arg is an empty sequence (line ${node.line})`);
+      return name === 'min' ? Math.min(...nums) : Math.max(...nums);
+    }
     if (name === 'range') {
       return makeRange(args, state, node.line);
     }
@@ -633,6 +642,44 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
       const title = args.length >= 3 ? printArg(args[2], state) : name;
       const points = zipPoints(args[0], args[1], state);
       state.plots.push({ kind: name, title, points });
+      return null;
+    }
+    if (name === 'area') {
+      const title = args.length >= 3 ? printArg(args[2], state) : name;
+      state.plots.push({ kind: 'area', title, points: zipPoints(args[0], args[1], state) });
+      return null;
+    }
+    if (name === 'reg') {
+      const title = args.length >= 3 ? printArg(args[2], state) : name;
+      const points = zipPoints(args[0], args[1], state);
+      const { slope, intercept } = leastSquares(points);
+      state.plots.push({ kind: 'reg', title, points, slope, intercept });
+      return null;
+    }
+    if (name === 'bar' || name === 'pie') {
+      if (args.length !== 2) throw new Error(`TypeError: ${name}() takes (labels, values) (line ${node.line})`);
+      const title = name;
+      state.plots.push({ kind: name, title, labels: readStringList(args[0], state), values: readNumberSeries(args[1], state) });
+      return null;
+    }
+    if (name === 'countplot' || name === 'hist' || name === 'boxplot') {
+      if (args.length !== 1) throw new Error(`TypeError: ${name}() takes one argument (line ${node.line})`);
+      const title = name;
+      const spec: PlotSpec = { kind: name, title };
+      if (name === 'countplot') spec.labels = readStringList(args[0], state);
+      else spec.values = readNumberSeries(args[0], state);
+      state.plots.push(spec);
+      return null;
+    }
+    if (name === 'heatmap') {
+      if (args.length !== 3) throw new Error(`TypeError: heatmap() takes (rows, cols, matrix) (line ${node.line})`);
+      state.plots.push({
+        kind: 'heatmap',
+        title: name,
+        labels: readStringList(args[0], state),
+        cols: readStringList(args[1], state),
+        matrix: readMatrix(args[2], state),
+      });
       return null;
     }
 
@@ -2365,6 +2412,42 @@ function readNumberSeries(v: RtValue, state: MemoryState): number[] {
     throw new Error(`TypeError: ${obj.type} is not an iterable of numbers`);
   }
   throw new Error('TypeError: expected a list of numbers');
+}
+
+/**
+ * Read a list/tuple of labels (heap strings or raw values) into bare strings —
+ * the category labels a bar/pie/countplot/heatmap axis needs. A str element is
+ * its text; anything else falls back to its print form.
+ */
+function readStringList(v: RtValue, state: MemoryState): string[] {
+  if (typeof v !== 'string' || !state.heap[v]) throw new Error('TypeError: expected a list of labels');
+  const obj = state.heap[v];
+  if (!['list', 'tuple', 'set'].includes(obj.type)) throw new Error(`TypeError: ${obj.type} is not a list of labels`);
+  return (obj.value as RtValue[]).map((e) => {
+    if (typeof e === 'string' && state.heap[e]?.type === 'str') return state.heap[e].value as string;
+    return printArg(e, state);
+  });
+}
+
+/** Read a list-of-lists into a row-major numeric matrix (a heatmap payload). */
+function readMatrix(v: RtValue, state: MemoryState): number[][] {
+  if (typeof v !== 'string' || !state.heap[v]) throw new Error('TypeError: expected a matrix (a list of lists)');
+  const obj = state.heap[v];
+  if (obj.type !== 'list') throw new Error(`TypeError: ${obj.type} is not a matrix`);
+  return (obj.value as RtValue[]).map((row) => readNumberSeries(row, state));
+}
+
+/** Ordinary least-squares fit of y on x: returns the slope and y-intercept. */
+function leastSquares(points: Array<[number, number]>): { slope: number; intercept: number } {
+  const n = points.length;
+  if (n === 0) return { slope: 0, intercept: 0 };
+  if (n === 1) return { slope: 0, intercept: points[0]![1]! };
+  let sx = 0, sy = 0, sxy = 0, sxx = 0;
+  for (const [x, y] of points) { sx += x; sy += y; sxy += x * y; sxx += x * x; }
+  const denom = n * sxx - sx * sx;
+  const slope = denom === 0 ? 0 : (n * sxy - sx * sy) / denom;
+  const intercept = (sy - slope * sx) / n;
+  return { slope, intercept };
 }
 
 function typeName(v: RtValue, state: MemoryState): string {

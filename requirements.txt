@@ -1,0 +1,14 @@
+# Pins for the CPython differential oracle (tests/differential/oracle.py).
+# The current corpus uses only the standard library; numpy/pandas are pinned
+# here ahead of the data-library differential cases (Phases 1 and 7) so that
+# CI installs are reproducible and the CoW teaching targets a fixed release.
+#
+# Versions chosen for Python >= 3.12 compatibility:
+#   numpy 2.1.x — current stable 2.x line, full 3.12 support.
+#   pandas 2.2.x — Copy-on-Write is available in this line as an opt-in
+#     (pd.set_option("mode.copy_on_write", True)). When pandas 3.x reaches
+#     GA with CoW enabled by default, bump this pin and drop the option in
+#     the test fixtures; the engine's column-block + CoW model (Phase 7) is
+#     what keeps the two in agreement at that point.
+numpy==2.1.3
+pandas==2.2.3
