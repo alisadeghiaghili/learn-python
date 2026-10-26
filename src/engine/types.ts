@@ -53,11 +53,42 @@ export interface Frame {
   locals: Record<string, RtValue>;
 }
 
-/** A simple static plot spec (rendered on the Plot board tab). */
+/** The chart kinds the Plot board tab can render. */
+export type PlotKind =
+  | 'scatter'
+  | 'line'
+  | 'bar'
+  | 'hist'
+  | 'pie'
+  | 'area'
+  | 'boxplot'
+  | 'countplot'
+  | 'heatmap'
+  | 'reg';
+
+/**
+ * A static plot spec (rendered on the Plot board tab). Most payload fields are
+ * optional and selected by `kind`: `points` for the 2-D x/y charts, `labels` +
+ * `values` for categorical charts, `values` alone (raw) for hist/boxplot (the
+ * renderer bins / computes quartiles), `cols` + `matrix` for a heatmap, and
+ * `slope`/`intercept` for a regression fit.
+ */
 export interface PlotSpec {
-  kind: 'scatter' | 'line';
+  kind: PlotKind;
   title: string;
-  points: Array<[number, number]>;
+  /** (x, y) pairs — scatter, line, area, reg. */
+  points?: Array<[number, number]>;
+  /** Category labels — bar, pie, countplot, heatmap rows. */
+  labels?: string[];
+  /** Values — bar, pie, and the raw data for hist / boxplot. */
+  values?: number[];
+  /** Heatmap column labels. */
+  cols?: string[];
+  /** Heatmap cell matrix (row-major, indexed by labels × cols). */
+  matrix?: number[][];
+  /** Least-squares fit — reg. */
+  slope?: number;
+  intercept?: number;
 }
 
 export interface MemoryState {

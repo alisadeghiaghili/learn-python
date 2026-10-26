@@ -2,7 +2,7 @@
  * Goal checking for levels (analogue of LGB TreeCompare).
  */
 
-import type { GoalResult, GoalSpec, MemoryState, Snapshot, SnapshotHeapObject } from './types';
+import type { GoalResult, GoalSpec, MemoryState, PlotKind, Snapshot, SnapshotHeapObject } from './types';
 
 /**
  * Deep structural equality of two snapshot fragments.
@@ -95,7 +95,7 @@ export function checkGoal(goal: GoalSpec | null, snapshot: Snapshot, runtime: Me
 
   if (goal.type === 'plot') {
     if (runtime.plots.length === 0) {
-      return { ok: false, message: 'No plot yet — call scatter() or line().' };
+      return { ok: false, message: 'No plot yet — draw one (scatter, line, bar, pie, hist, …).' };
     }
     if (goal.kind && !runtime.plots.some((p) => p.kind === goal.kind)) {
       return { ok: false, message: `Expected a ${goal.kind} plot.` };
@@ -320,9 +320,9 @@ export const preds = {
   /**
    * A plot has been drawn (optionally of a specific kind).
    */
-  hasPlot(kind?: 'scatter' | 'line') {
+  hasPlot(kind?: PlotKind) {
     return (_snapshot: Snapshot, runtime: MemoryState): boolean | string => {
-      if (runtime.plots.length === 0) return 'Draw a plot with scatter() or line().'
+      if (runtime.plots.length === 0) return 'Draw a plot (scatter, line, bar, pie, hist, …).'
       if (kind && !runtime.plots.some((p) => p.kind === kind)) return `Draw a ${kind} plot.`
       return true;
     };

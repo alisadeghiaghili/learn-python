@@ -151,6 +151,68 @@ describe('engine', () => {
     expect(state.plots[0].title).toBe('trend');
   });
 
+  test('bar() pushes a bar plot with labels and values', () => {
+    const state = runFresh('l = ["A", "B"]\nv = [3, 5]\nbar(l, v)');
+    const p = state.plots[0]!;
+    expect(p.kind).toBe('bar');
+    expect(p.labels).toEqual(['A', 'B']);
+    expect(p.values).toEqual([3, 5]);
+  });
+
+  test('countplot() pushes raw labels for the renderer to tally', () => {
+    const state = runFresh('c = ["r", "b", "r"]\ncountplot(c)');
+    const p = state.plots[0]!;
+    expect(p.kind).toBe('countplot');
+    expect(p.labels).toEqual(['r', 'b', 'r']);
+  });
+
+  test('hist() pushes raw values for the renderer to bin', () => {
+    const state = runFresh('d = [2, 3, 3, 4]\nhist(d)');
+    const p = state.plots[0]!;
+    expect(p.kind).toBe('hist');
+    expect(p.values).toEqual([2, 3, 3, 4]);
+  });
+
+  test('pie() pushes a pie plot with labels and values', () => {
+    const state = runFresh('l = ["x", "y"]\nv = [70, 30]\npie(l, v)');
+    const p = state.plots[0]!;
+    expect(p.kind).toBe('pie');
+    expect(p.labels).toEqual(['x', 'y']);
+    expect(p.values).toEqual([70, 30]);
+  });
+
+  test('area() pushes an area plot with points', () => {
+    const state = runFresh('x = [1, 2, 3]\ny = [1, 3, 6]\narea(x, y)');
+    const p = state.plots[0]!;
+    expect(p.kind).toBe('area');
+    expect(p.points).toEqual([[1, 1], [2, 3], [3, 6]]);
+  });
+
+  test('boxplot() pushes raw values for the renderer to summarize', () => {
+    const state = runFresh('v = [1, 2, 2, 3, 20]\nboxplot(v)');
+    const p = state.plots[0]!;
+    expect(p.kind).toBe('boxplot');
+    expect(p.values).toEqual([1, 2, 2, 3, 20]);
+  });
+
+  test('heatmap() pushes a matrix with row and column labels', () => {
+    const state = runFresh('r = ["A", "B"]\nc = ["x", "y"]\nm = [[1, 2], [3, 4]]\nheatmap(r, c, m)');
+    const p = state.plots[0]!;
+    expect(p.kind).toBe('heatmap');
+    expect(p.labels).toEqual(['A', 'B']);
+    expect(p.cols).toEqual(['x', 'y']);
+    expect(p.matrix).toEqual([[1, 2], [3, 4]]);
+  });
+
+  test('reg() pushes points plus a least-squares fit', () => {
+    const state = runFresh('x = [1, 2, 3]\ny = [2, 4, 6]\nreg(x, y)');
+    const p = state.plots[0]!;
+    expect(p.kind).toBe('reg');
+    expect(p.points).toEqual([[1, 2], [2, 4], [3, 6]]);
+    expect(p.slope).toBeCloseTo(2);
+    expect(p.intercept).toBeCloseTo(0);
+  });
+
   test('hasPlot predicate passes once a plot exists', () => {
     const state = runFresh('x = [1, 2]\ny = [1, 4]\nscatter(x, y)');
     const goal = { type: 'plot' as const, kind: 'scatter' as const };
