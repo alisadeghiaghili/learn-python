@@ -18,6 +18,7 @@ export const deG6: LevelGroup = {
     sqlalchemy: 'SQLAlchemy & Identity Map',
     production: 'Produktion & Architektur',
     oop: 'Objektorientierte Programmierung (OOP)',
+    'oop-advanced': 'Fortgeschrittene OOP & Datenmodell',
   },
   deepLessons: {
     slicing: `## Beginner: Die Grundlagen des Slicings
@@ -206,6 +207,91 @@ Mit \`Depends()\` werden Abhängigkeiten wie Datenbankverbindungen modular in En
 
 ## Expert: Produktionsreife Services
 Strukturierte JSON-Logs, Health-Checks und saubere Graceful-Shutdown-Routinen sichern den Betrieb.`,
+    'oop-advanced': `## Beginner: Zeichenketten-Darstellung (__repr__ vs. __str__)
+Jedes Python-Objekt kann zwei unterschiedliche String-Darstellungen bereitstellen:
+\`\`\`python
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    def __str__(self):
+        return f"({self.x}, {self.y})"
+    def __repr__(self):
+        return f"Point({self.x}, {self.y})"
+\`\`\`
+- \`__str__\` richtet sich an Endbenutzer (aufgerufen durch \`print()\`, \`str()\` und f-Strings).
+- \`__repr__\` richtet sich an Entwickler und Debugging-Tools (aufgerufen durch \`repr()\`, REPL und Logs).
+Fehlt \`__str__\`, greift Python automatisch auf \`__repr__\` zurück.
+
+## Intermediate: Kapselung, Deskriptoren und Validierung mit @property
+In Python werden direkte Attributzugriffe bevorzugt. Müssen später Validierungen oder Berechnungen ergänzt werden, bietet \`@property\` saubere Kapselung ohne Bruch der öffentlichen Schnittstelle:
+\`\`\`python
+class BankAccount:
+    def __init__(self, balance):
+        self._balance = balance
+
+    @property
+    def balance(self):
+        return self._balance
+
+    @balance.setter
+    def balance(self, amount):
+        if amount < 0:
+            raise ValueError("Kontostand darf nicht negativ sein")
+        self._balance = amount
+\`\`\`
+Unter der Haube ist \`@property\` ein Python-Deskriptor mit \`__get__\` und \`__set__\`.
+
+## Advanced: Alternative Konstruktoren und Operatorüberladung
+Python erlaubt Klassen, Sprachoperatoren und Instanziierungsmuster anzupassen:
+\`\`\`python
+class Money:
+    def __init__(self, amount, currency="EUR"):
+        self.amount = amount
+        self.currency = currency
+
+    @classmethod
+    def from_cents(cls, cents, currency="EUR"):
+        return cls(cents / 100, currency)
+
+    def __add__(self, other):
+        if not isinstance(other, Money) or self.currency != other.currency:
+            return NotImplemented
+        return Money(self.amount + other.amount, self.currency)
+
+    def __eq__(self, other):
+        return isinstance(other, Money) and self.amount == other.amount and self.currency == other.currency
+\`\`\`
+- \`@classmethod\` empfängt \`cls\` und erzeugt abgeleitete Subklassen typkorrekt.
+- Operatorüberladung (\`__add__\`, \`__eq__\`) integriert eigene Datentypen nativ in die Sprache.
+
+## Expert: Vertragserzwingung mit ABCs und Speicheroptimierung mit __slots__
+Produktionsarchitekturen verlangen nach klaren Verträgen und Ressourceneffizienz:
+
+### 1. Abstrakte Basisklassen (ABCs)
+Mit \`abc.ABC\` werden Schnittstellenverträge zur Laufzeit erzwungen:
+\`\`\`python
+from abc import ABC, abstractmethod
+
+class EventPublisher(ABC):
+    @abstractmethod
+    def publish(self, topic: str, payload: dict) -> None:
+        pass
+\`\`\`
+Subklassen müssen alle abstrakten Methoden implementieren, bevor Instanzen erzeugt werden können.
+
+### 2. Speicheroptimierung mit __slots__
+Standardmäßig speichert jedes Python-Objekt seine Attribute in einem internen Dictionary (\`__dict__\`), was ca. 150-200 Bytes Overhead pro Objekt erzeugt:
+\`\`\`python
+class CompactRecord:
+    __slots__ = ("id", "timestamp", "value")
+    def __init__(self, id, timestamp, value):
+        self.id = id
+        self.timestamp = timestamp
+        self.value = value
+\`\`\`
+\`__slots__\` eliminiert das Instanz-Dictionary und nutzt feste C-Struct-Offsets. Bei Millionen Datensätzen spart dies bis zu 60% RAM.`,
+
   },
   levels: {
     'oop-class-instance': {
@@ -499,5 +585,76 @@ Strukturierte JSON-Logs, Health-Checks und saubere Graceful-Shutdown-Routinen si
       brief: 'Injiziere Abhängigkeiten in Routen mit `Depends()`.',
       lesson: 'Depends() entkoppelt Endpunkte von Ressourcen und erleichtert automatisierte Tests.',
     },
+    'oop-repr-str': {
+      name: 'Repräsentation vs. Anzeige: __repr__ und __str__',
+      brief: 'Erstelle `u = User("ada", "admin")`. Berechne `display = str(u)` und `debug = repr(u)`. Sieh, wie `__str__` auf Lesbarkeit und `__repr__` auf präzise Diagnose ausgelegt ist.',
+      learning: [
+        '__str__ liefert menschenlesbaren Text für print() und str()',
+        '__repr__ liefert eindeutige Diagnose-Darstellung für Entwickler',
+        'Python nutzt __repr__ als Fallback, wenn __str__ fehlt',
+      ],
+      fieldNotes: [
+        'Nutze in Logs %r oder {!r}, um gezielt __repr__ aufzurufen',
+        'Ein gutes __repr__ erfüllt idealerweise eval(repr(obj)) == obj',
+      ],
+      lesson: 'Python trennt zwischen benutzerfreundlicher Anzeige (`__str__`) und eindeutiger Entwickler-Diagnose (`__repr__`).',
+    },
+    'oop-property-encapsulation': {
+      name: 'Kapselung mit @property und Setter-Validierung',
+      brief: 'Erzeuge `t = Temperature(25)`, setze `t.celsius = 30` und lies `reading = t.celsius`. Beobachte, wie der Attributzugriff Validierungen ohne Methodenaufrufe ausführt.',
+      learning: [
+        '@property ermöglicht Getter-Verhalten mit regulärer Punktsyntax',
+        '@<name>.setter validiert Werte bei Zuweisungen',
+        'Erhält die Kompatibilität der öffentlichen API',
+      ],
+      fieldNotes: [
+        'Ein führender Unterstrich (_celsius) signalisiert internen Zustand',
+        'Verwende @property nur für schnelle Zugriffe, nicht für teure Berechnungen',
+      ],
+      lesson: 'Mit `@property` und `@celsius.setter` lassen sich Validierungen transparent hinter gewöhnlichen Attributzugriffen hinterlegen.',
+    },
+    'oop-classmethod-factory': {
+      name: 'Factory-Konstruktoren mit @classmethod und @staticmethod',
+      brief: 'Erzeuge `cfg = Config.from_dict({"host": "localhost", "port": 8080})` und prüfe den Port mit `valid = Config.is_valid_port(cfg.port)`.',
+      learning: [
+        '@classmethod nimmt cls entgegen und dient als alternativer Konstruktor',
+        '@staticmethod kapselt Hilfsfunktionen im Namensraum der Klasse',
+        'Factory-Methoden mit cls instanziieren Subklassen polymorph korrekt',
+      ],
+      fieldNotes: [
+        'Typische Namenskonventionen sind from_dict, from_json oder from_env',
+        'Statische Methoden ohne Klassenbezug sind oft als Modulfunktion lesbarer',
+      ],
+      lesson: '`@classmethod` ermöglicht alternative Konstruktoren über das Klassenobjekt (`cls`), während `@staticmethod` reine Hilfsfunktionen bündelt.',
+    },
+    'oop-operator-overloading': {
+      name: 'Operatorüberladung und Wertegleichheit',
+      brief: 'Addiere Vektoren `v3 = v1 + v2` und prüfe `is_equal = (v3 == Vector(6, 8))`. Beobachte, wie Dunder-Methoden Sprachoperatoren für eigene Datentypen freischalten.',
+      learning: [
+        '__add__ implementiert benutzerdefinierte Additionslogik für +',
+        '__eq__ ersetzt standardmäßigen Identitätsvergleich durch Wertegleichheit',
+        'Duck Typing ermöglicht nahtlose polymorphe Interoperabilität',
+      ],
+      fieldNotes: [
+        'Bei Implementierung von __eq__ sollte für Sets/Dicts auch __hash__ bedacht werden',
+        'Gebe NotImplemented zurück, wenn fremde Typen nicht unterstützt werden',
+      ],
+      lesson: 'Das Python-Datenmodell erlaubt über Dunder-Methoden (`__add__`, `__eq__`) die vollständige Integration eigener Typen in Sprachoperatoren.',
+    },
+    'oop-abstract-protocol': {
+      name: 'Abstrakte Basisklassen und Schnittstellenverträge',
+      brief: 'Erzeuge `repo = InMemoryRepo()`, speichere Daten mit `repo.set("session", "active")` und lies `item = repo.get("session")`. Sieh, wie `Repository(ABC)` Methoden vorschreibt.',
+      learning: [
+        'abc.ABC verhindert die Instanziierung unvollständiger Klassen',
+        'Erzwingt explizite Architekturverträge zwischen Modulen',
+        'Entkoppelt Anwendungslogik von konkreten Speicher- oder Netzwerkdiensten',
+      ],
+      fieldNotes: [
+        'Instanziierungsversuche ohne abstrakte Methoden werfen TypeError',
+        'Abstrakte Methoden können Basisimplementierungen für super() enthalten',
+      ],
+      lesson: 'Abstrakte Basisklassen (`abc.ABC`) erzwingen verbindliche Schnittstellenverträge zur Laufzeit und verhindern unvollständige Subklassen.',
+    },
+
   },
 };

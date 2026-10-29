@@ -31,6 +31,7 @@ import { series as testingPytest } from './testing-pytest';
 import { series as sqlalchemy } from './sqlalchemy';
 import { series as production } from './production';
 import { series as oop } from './oop';
+import { series as oopAdvanced } from './oop-advanced';
 
 /**
  * All series, in teaching order.
@@ -57,6 +58,7 @@ export const sequences: Sequence[] = [
   ...iterators,
   ...functional,
   ...oop,
+  ...oopAdvanced,
   ...numpy,
   ...pandas,
   ...slicing,
