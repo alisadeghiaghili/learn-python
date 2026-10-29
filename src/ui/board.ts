@@ -3,7 +3,7 @@
  * amber reference edges), RAM board, and a Plot tab for plotting levels.
  *
  * Includes stepper scrubber slider, autoplay transport controls, scalar heap
- * toggle, and screen-reader accessible live text alternatives.
+ * toggle, wheel zoom, drag pan, "Fit to view", and screen-reader accessible live text alternatives.
  */
 
 import type { MemoryState, PlotSpec } from '../engine/types';
@@ -143,6 +143,14 @@ export class BoardView {
   private playTimer: number | null = null;
   private playSpeed = 1; // 0.5, 1, 2
   private showScalarsOnHeap = false;
+
+  // Zoom and pan state
+  private zoom = 1;
+  private panX = 0;
+  private panY = 0;
+  private isDragging = false;
+  private dragStartX = 0;
+  private dragStartY = 0;
 
   constructor(
     root: HTMLElement,
@@ -307,7 +315,7 @@ export class BoardView {
       btn.classList.toggle('is-active', s === speed);
     });
     if (this.isPlaying) {
-      this.play(); // restart timer with new interval
+      this.play();
     }
   }
 
@@ -342,6 +350,12 @@ export class BoardView {
 
     // Accessibility announcement for screen readers
     this.updateAccessibility();
+  }
+
+  private updateTransform(): void {
+    if (!this.canvas) return;
+    this.canvas.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
+    this.canvas.style.transformOrigin = '0 0';
   }
 
   /** Update accessible text alternatives and aria-live region. */
@@ -401,10 +415,15 @@ export class BoardView {
             <span class="tab-badge">addr · ref</span>
           </button>
         </div>
-        <div class="board-controls">
+        <div class="board-header-actions">
           <button type="button" class="describe-memory-btn" id="describe-memory-btn" aria-label="Describe current memory state">
             Describe memory
           </button>
+          <div class="canvas-controls" role="toolbar" aria-label="Canvas zoom and pan controls">
+            <button type="button" class="canvas-btn" id="canvas-fit-btn" title="Fit to view (reset zoom and pan)">Fit</button>
+            <button type="button" class="canvas-btn" id="canvas-zoom-in-btn" title="Zoom in">+</button>
+            <button type="button" class="canvas-btn" id="canvas-zoom-out-btn" title="Zoom out">−</button>
+          </div>
           <button type="button" class="scalar-toggle-chip" id="scalar-toggle-btn" aria-pressed="${this.showScalarsOnHeap}">
             ${this.showScalarsOnHeap ? 'Showing all on heap' : 'Inline scalars'}
           </button>
@@ -412,7 +431,7 @@ export class BoardView {
       </div>
       <div class="board-body">
         <div class="board-pane${this.currentTab === 'memory' ? ' is-active' : ''}" data-pane="memory" id="pane-memory" role="tabpanel" aria-labelledby="tab-memory" tabindex="0">
-          <div class="canvas-wrap">
+          <div class="canvas-wrap" id="memory-canvas-wrap">
             <svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python memory visualization canvas"></svg>
             <div class="sr-only live-desc" id="board-live-region" aria-live="polite"></div>
             <div class="sr-only text-alternative" id="board-text-alt"></div>
@@ -506,8 +525,91 @@ export class BoardView {
       });
     });
 
+    // Canvas zoom & pan
+    const memWrap = this.root.querySelector('#memory-canvas-wrap') as HTMLElement;
+    if (memWrap) {
+      memWrap.addEventListener('wheel', (e: WheelEvent) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.1 : 0.9;
+        this.zoom = Math.max(0.4, Math.min(3.0, this.zoom * factor));
+        this.updateTransform();
+      }, { passive: false });
+
+      memWrap.addEventListener('mousedown', (e: MouseEvent) => {
+        if ((e.target as Element)?.closest('[role="button"]') || (e.target as Element)?.closest('button')) {
+          return;
+        }
+        this.isDragging = true;
+        this.dragStartX = e.clientX - this.panX;
+        this.dragStartY = e.clientY - this.panY;
+        memWrap.style.cursor = 'grabbing';
+      });
+
+      window.addEventListener('mousemove', (e: MouseEvent) => {
+        if (!this.isDragging) return;
+        this.panX = e.clientX - this.dragStartX;
+        this.panY = e.clientY - this.dragStartY;
+        this.updateTransform();
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (!this.isDragging) return;
+        this.isDragging = false;
+        if (memWrap) memWrap.style.cursor = 'grab';
+      });
+    }
+
+    const fitBtn = this.root.querySelector('#canvas-fit-btn');
+    fitBtn?.addEventListener('click', () => {
+      this.panX = 0;
+      this.panY = 0;
+      this.zoom = 1;
+      this.updateTransform();
+    });
+
+    const zoomInBtn = this.root.querySelector('#canvas-zoom-in-btn');
+    zoomInBtn?.addEventListener('click', () => {
+      this.zoom = Math.min(3.0, this.zoom * 1.25);
+      this.updateTransform();
+    });
+
+    const zoomOutBtn = this.root.querySelector('#canvas-zoom-out-btn');
+    zoomOutBtn?.addEventListener('click', () => {
+      this.zoom = Math.max(0.4, this.zoom / 1.25);
+      this.updateTransform();
+    });
+
+    // Stepper keyboard shortcuts (ArrowLeft, ArrowRight, Home, End, Space)
+    window.addEventListener('keydown', (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
+        if (target !== this.stepSlider) return;
+      }
+      if (this.trace.length < 2) return;
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        this.stepPrev();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        this.stepNext();
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        this.stepFirst();
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        this.stepLast();
+      } else if (e.key === ' ' || e.code === 'Space') {
+        if (target === this.stepSlider || target?.closest('.step-bar')) {
+          e.preventDefault();
+          this.togglePlay();
+        }
+      }
+    });
+
     this.updateScalarButton();
     this.updateStepper();
+    this.updateTransform();
     this.renderPlot();
   }
 

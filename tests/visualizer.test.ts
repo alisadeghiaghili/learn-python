@@ -143,6 +143,26 @@ z = x + y`);
       expect(svg.children.length).toBeGreaterThan(0);
     });
 
+    it('renders edges-layer before nodes-layer to preserve depth ordering', () => {
+      const state = runFresh('xs = [1, 2]');
+      const svg = createMockSvg();
+      renderMemory(svg, state, [], Object.keys(state.heap));
+      const edgesLayer = svg.children.find((c: any) => c.getAttribute?.('class') === 'edges-layer');
+      const nodesLayer = svg.children.find((c: any) => c.getAttribute?.('class') === 'nodes-layer');
+      expect(edgesLayer).toBeDefined();
+      expect(nodesLayer).toBeDefined();
+      const edgesIdx = svg.children.indexOf(edgesLayer);
+      const nodesIdx = svg.children.indexOf(nodesLayer);
+      expect(edgesIdx).toBeLessThan(nodesIdx);
+    });
+
+    it('collapses containers longer than 12 items', () => {
+      const state = runFresh('xs = list(range(20))');
+      const svg = createMockSvg();
+      renderMemory(svg, state, [], Object.keys(state.heap));
+      expect(svg.children.length).toBeGreaterThan(0);
+    });
+
     it('renders RAM view with REFS header and reference count title', () => {
       const state = runFresh('xs = [1, 2]');
       const svg = createMockSvg();

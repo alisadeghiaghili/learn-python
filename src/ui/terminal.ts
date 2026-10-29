@@ -1,71 +1,63 @@
 /**
- * Console REPL: log, prompt input, word-by-word Tab completion with a
- * pixel-aligned ghost suffix, history, and Alt+- to insert ` = `.
- * Ported from learn-r, retargeted to Python.
+ * Terminal UI: an interactive Python prompt, history scrollback, and ghost
+ * auto-complete driven by level hints and vocabulary.
+ *
+ * Tab completions are generated dynamically so learners can hit Tab on any
+ * exercise and fill the next word.
+ *
+ * Supports multi-line blocks with `... ` continuation prompts, auto-indentation,
+ * paste block execution, history navigation, and keyboard shortcuts.
  */
 
 import { escapeHtml } from './dialog';
 
-export type LogKind = 'cmd' | 'out' | 'err' | 'meta' | 'ok';
+export type LogKind = 'cmd' | 'out' | 'err' | 'ok' | 'meta';
 
 export interface LogLine {
   kind: LogKind;
   text: string;
 }
 
+/** Python built-in keywords and common functions available at any prompt. */
 const BASE_COMMANDS = [
   'help',
   'levels',
   'lesson',
+  'goal',
   'hint',
   'solution',
-  'reset',
   'undo',
+  'reset',
   'sandbox',
-  'clear',
   'script',
-  'x = 3',
-  'a = [1, 2, 3]',
-  'b = a',
-  'a.append(4)',
-  'd = {"k": 1}',
-  "d['k'] = 2",
-  't = (1, 2)',
-  't is b',
-  'def double(n):',
-  '    return n * 2',
-  'r = double(21)',
-  'import copy as cp',
-  'b = cp.copy(a)',
-  'b = cp.deepcopy(a)',
-  'it = iter(a)',
-  'x = next(it)',
-  'import collections as c',
-  'd = c.defaultdict(int)',
-  'd["missing"] = d["missing"] + 1',
-  'import functools as f',
-  'ms = map(int, xs)',
-  'a = next(ms)',
-  'fs = filter(bool, xs)',
-  'def add(p, q):',
-  '    return p + q',
-  'r = f.reduce(add, xs)',
+  'clear',
+  'golf',
+  'print()',
+  'type()',
+  'id()',
+  'len()',
+  'range()',
+  'list()',
+  'dict()',
+  'set()',
+  'tuple()',
+  'int()',
+  'float()',
+  'str()',
+  'bool()',
+  'sum()',
+  'min()',
+  'max()',
+  'sorted()',
+  'enumerate()',
+  'zip()',
+  'map()',
+  'filter()',
   'import numpy as np',
-  'a = np.array([1, 2, 3])',
-  'b = a.copy()',
-  'v = a[:2]',
-  'v[0] = 9',
-  'b = a + 1',
-  's = b.sum()',
-  'print("hello", 3)',
-  'len(a)',
-  'type(a)',
-  'a.copy()',
-  'str(x)',
-  'a[0]',
-  'a.pop()',
-  'd.keys()',
-  'len(d)',
+  'import pandas as pd',
+  'import asyncio',
+  'import threading',
+  'import matplotlib.pyplot as plt',
 ];
 
 interface WordState {
@@ -76,7 +68,7 @@ interface WordState {
 
 function parseLine(value: string): WordState {
   const endsWithSpace = /\s$/.test(value);
-  const trimmed = value.replace(/\s+$/, '');
+  const trimmed = value.trim();
   if (!trimmed) {
     return { head: [], current: '', afterSpace: endsWithSpace };
   }
@@ -87,28 +79,55 @@ function parseLine(value: string): WordState {
   return { head: parts.slice(0, -1), current: parts[parts.length - 1]!, afterSpace: false };
 }
 
+/** Check if a line opens a compound statement or has unclosed brackets. */
+function isOpenBlock(code: string): boolean {
+  const trimmed = code.trimEnd();
+  if (trimmed.endsWith(':')) return true;
+  let paren = 0;
+  let bracket = 0;
+  let brace = 0;
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i];
+    if (ch === '\\') { i++; continue; }
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
+    if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
+    if (inSingle || inDouble) continue;
+    if (ch === '#') break;
+    if (ch === '(') paren++;
+    else if (ch === ')') paren = Math.max(0, paren - 1);
+    else if (ch === '[') bracket++;
+    else if (ch === ']') bracket = Math.max(0, bracket - 1);
+    else if (ch === '{') brace++;
+    else if (ch === '}') brace = Math.max(0, brace - 1);
+  }
+  return paren > 0 || bracket > 0 || brace > 0;
+}
+
 export class TerminalView {
   private logEl: HTMLElement;
   private inputEl: HTMLInputElement;
+  private promptEl: HTMLElement;
   private wrapEl: HTMLElement;
   private ghostEl: HTMLElement;
   private hintEl: HTMLElement;
   private lines: LogLine[] = [];
   private history: string[] = [];
   private historyIdx = -1;
+  private multilineBuffer: string[] = [];
   private draft = '';
   private hint = '';
   private extraCompletions: string[] = [];
   private wordCycle: string[] = [];
   private wordIdx = 0;
   private wordKey = '';
-
-  private onSubmit: (cmd: string) => void;
+  private onSubmit: (cmd: string, options?: { alreadyEchoed?: boolean }) => void;
   private onOpenEditor: () => void;
 
   constructor(
     root: HTMLElement,
-    onSubmit: (cmd: string) => void,
+    onSubmit: (cmd: string, options?: { alreadyEchoed?: boolean }) => void,
     onOpenEditor: () => void,
   ) {
     this.onSubmit = onSubmit;
@@ -142,6 +161,7 @@ export class TerminalView {
 
     this.logEl = root.querySelector('#term-log')!;
     this.inputEl = root.querySelector('#term-input')!;
+    this.promptEl = root.querySelector('.prompt')!;
     this.wrapEl = root.querySelector('#term-input-wrap')!;
     this.ghostEl = root.querySelector('#term-ghost')!;
     this.hintEl = root.querySelector('#term-hint')!;
@@ -152,6 +172,20 @@ export class TerminalView {
 
     this.inputEl.addEventListener('keydown', (e) => this.onKey(e));
     this.inputEl.addEventListener('input', () => this.syncGhost());
+
+    this.inputEl.addEventListener('paste', (e) => {
+      const text = e.clipboardData?.getData('text');
+      if (text && text.includes('\n')) {
+        e.preventDefault();
+        const prefix = this.multilineBuffer.length > 0 ? this.multilineBuffer.join('\n') + '\n' : '';
+        const combined = (prefix + text).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+        this.multilineBuffer = [];
+        this.promptEl.textContent = '>>> ';
+        this.inputEl.value = '';
+        this.recordHistory(combined);
+        this.onSubmit(combined);
+      }
+    });
   }
 
   focus(): void {
@@ -174,11 +208,30 @@ export class TerminalView {
     return this.lines;
   }
 
+  getHistory(): string[] {
+    return [...this.history];
+  }
+
+  setHistory(history: string[]): void {
+    this.history = [...history];
+    this.historyIdx = this.history.length;
+  }
+
+  private recordHistory(cmd: string): void {
+    const trimmed = cmd.trim();
+    if (!trimmed) return;
+    if (this.history.length > 0 && this.history[this.history.length - 1] === trimmed) {
+      this.historyIdx = this.history.length;
+      return;
+    }
+    this.history.push(trimmed);
+    this.historyIdx = this.history.length;
+  }
+
   push(kind: LogKind, text: string): void {
     if (kind === 'cmd' && text) {
       const clean = text.startsWith('>>> ') ? text.slice(4) : text;
-      this.history.push(clean.trim());
-      this.historyIdx = this.history.length;
+      this.recordHistory(clean.replace(/\n\.\.\. /g, '\n'));
     }
     this.lines.push({ kind, text });
     if (this.lines.length > 500) this.lines = this.lines.slice(-400);
@@ -187,6 +240,8 @@ export class TerminalView {
 
   clear(): void {
     this.lines = [];
+    this.multilineBuffer = [];
+    if (this.promptEl) this.promptEl.textContent = '>>> ';
     this.render();
   }
 
@@ -413,7 +468,14 @@ export class TerminalView {
     }
     if (e.key === 'Escape') {
       e.preventDefault();
-
+      if (this.multilineBuffer.length > 0) {
+        this.multilineBuffer = [];
+        this.promptEl.textContent = '>>> ';
+        this.inputEl.value = '';
+        this.push('meta', 'KeyboardInterrupt');
+        this.syncGhost();
+        return;
+      }
       this.inputEl.value = '';
       this.wordCycle = [];
       this.wordKey = '';
@@ -424,16 +486,62 @@ export class TerminalView {
     if (e.key === 'Enter') {
       e.preventDefault();
       if (document.querySelector('.overlay .modal')) return;
-      const value = this.inputEl.value;
+      const rawValue = this.inputEl.value;
       this.inputEl.value = '';
-      const trimmed = value.trim();
-      if (trimmed) {
-        this.history.push(trimmed);
-        this.historyIdx = this.history.length;
-      }
       this.wordCycle = [];
       this.wordKey = '';
-      this.onSubmit(value);
+
+      if (this.multilineBuffer.length > 0) {
+        // Inside a multi-line block
+        if (!rawValue.trim()) {
+          // Blank line finishes the block!
+          this.lines.push({ kind: 'cmd', text: '... ' });
+          this.promptEl.textContent = '>>> ';
+          const fullCode = this.multilineBuffer.join('\n');
+          this.multilineBuffer = [];
+          this.recordHistory(fullCode);
+          this.render();
+          this.onSubmit(fullCode, { alreadyEchoed: true });
+          this.focus();
+          this.syncGhost();
+          return;
+        }
+        // Continuation line inside block
+        this.lines.push({ kind: 'cmd', text: `... ${rawValue}` });
+        this.multilineBuffer.push(rawValue);
+        const indentMatch = rawValue.match(/^(\s*)/);
+        let indent = indentMatch ? indentMatch[1].length : 0;
+        if (rawValue.trimEnd().endsWith(':')) {
+          indent += 4;
+        } else if (/^\s*(return|pass|break|continue|raise)\b/.test(rawValue)) {
+          indent = Math.max(0, indent - 4);
+        }
+        this.inputEl.value = ' '.repeat(indent);
+        this.render();
+        this.focus();
+        this.syncGhost();
+        return;
+      }
+
+      // Single-line or start of new multi-line block
+      const trimmed = rawValue.trim();
+      if (isOpenBlock(rawValue)) {
+        this.lines.push({ kind: 'cmd', text: `>>> ${rawValue}` });
+        this.multilineBuffer.push(rawValue);
+        this.promptEl.textContent = '... ';
+        const indentMatch = rawValue.match(/^(\s*)/);
+        const indent = (indentMatch ? indentMatch[1].length : 0) + (rawValue.trimEnd().endsWith(':') ? 4 : 4);
+        this.inputEl.value = ' '.repeat(indent);
+        this.render();
+        this.focus();
+        this.syncGhost();
+        return;
+      }
+
+      if (trimmed) {
+        this.recordHistory(trimmed);
+        this.onSubmit(rawValue);
+      }
       this.focus();
       this.syncGhost();
       return;

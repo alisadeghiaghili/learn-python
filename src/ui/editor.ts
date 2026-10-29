@@ -1,6 +1,9 @@
 /**
- * Collapsible multi-line Python script drawer (ported from learn-r).
+ * Collapsible multi-line Python script drawer.
  * Alt+- inserts ` = `.
+ * Ctrl+Enter runs the entire script (Run all); Ctrl+Shift+Enter runs current line.
+ * Esc followed by Tab navigates out of the textarea without a keyboard trap.
+ * Script code is persisted per-level in localStorage.
  */
 
 export class ScriptEditorView {
@@ -8,6 +11,8 @@ export class ScriptEditorView {
   private textarea!: HTMLTextAreaElement;
   private onRun: (code: string) => void;
   private isExpanded = false;
+  private currentLevelId = 'sandbox';
+  private allowTabExit = false;
 
   constructor(root: HTMLElement, onRun: (code: string) => void) {
     this.root = root;
@@ -21,6 +26,27 @@ export class ScriptEditorView {
 
   setValue(val: string): void {
     this.textarea.value = val;
+    this.saveCurrentCode();
+  }
+
+  setLevel(id: string, defaultCode = ''): void {
+    this.saveCurrentCode();
+    this.currentLevelId = id;
+    try {
+      const saved = localStorage.getItem(`learn-python-editor-${id}`);
+      this.textarea.value = saved !== null ? saved : defaultCode;
+    } catch {
+      this.textarea.value = defaultCode;
+    }
+  }
+
+  private saveCurrentCode(): void {
+    if (!this.textarea) return;
+    try {
+      localStorage.setItem(`learn-python-editor-${this.currentLevelId}`, this.textarea.value);
+    } catch {
+      /* ignore */
+    }
   }
 
   toggle(expanded?: boolean): void {
@@ -60,7 +86,7 @@ export class ScriptEditorView {
     }
   }
 
-  private getCodeToRun(mode: 'line' | 'all' = 'line'): string {
+  private getCodeToRun(mode: 'line' | 'all' = 'all'): string {
     const val = this.textarea.value;
     if (!val.trim()) return '';
 
@@ -98,14 +124,15 @@ export class ScriptEditorView {
         <span class="editor-title">Python Script</span>
         <span class="editor-line-badge" id="editor-line-badge" hidden></span>
         <div class="editor-bar-actions">
-          <button type="button" class="btn btn-sm primary" id="editor-run-btn" title="Run current line or selection (Ctrl+Enter)">
-            <span>Run</span>
+          <button type="button" class="btn btn-sm primary" id="editor-run-all-btn" title="Run entire script (Ctrl+Enter)">
+            <span>Run all</span>
             <span class="kbd-badge">Ctrl+↵</span>
           </button>
-          <button type="button" class="btn btn-sm ghost" id="editor-run-all-btn" title="Run entire script (Ctrl+Shift+Enter)">
-            Run all
+          <button type="button" class="btn btn-sm ghost" id="editor-run-btn" title="Run current line or selection (Ctrl+Shift+Enter)">
+            <span>Run line</span>
+            <span class="kbd-badge">⇧Ctrl+↵</span>
           </button>
-          <button type="button" class="btn btn-sm ghost" id="editor-toggle-btn">
+          <button type="button" class="btn btn-sm ghost" id="editor-toggle-btn" title="Close editor">
             Close
           </button>
         </div>
@@ -118,24 +145,24 @@ export class ScriptEditorView {
           autocomplete="off"
           autocorrect="off"
           autocapitalize="off"
-          placeholder="# Write Python code here. Press Run (Ctrl+Enter) to execute the line/selection."
+          placeholder="# Write Python code here. Press Run all (Ctrl+Enter) or Run line (Ctrl+Shift+Enter)."
           rows="6"
         ></textarea>
       </div>
     `;
 
     this.textarea = this.root.querySelector('#editor-textarea')!;
-    const runBtn = this.root.querySelector('#editor-run-btn')!;
     const runAllBtn = this.root.querySelector('#editor-run-all-btn')!;
+    const runLineBtn = this.root.querySelector('#editor-run-btn')!;
     const toggleBtn = this.root.querySelector('#editor-toggle-btn')!;
-
-    runBtn.addEventListener('click', () => {
-      const code = this.getCodeToRun('line');
-      if (code) this.onRun(code);
-    });
 
     runAllBtn.addEventListener('click', () => {
       const code = this.getCodeToRun('all');
+      if (code) this.onRun(code);
+    });
+
+    runLineBtn.addEventListener('click', () => {
+      const code = this.getCodeToRun('line');
       if (code) this.onRun(code);
     });
 
@@ -143,21 +170,22 @@ export class ScriptEditorView {
       this.toggle(false);
     });
 
-    let allowTabExit = false;
+    this.textarea.addEventListener('input', () => {
+      this.saveCurrentCode();
+    });
+
     this.textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        allowTabExit = true;
-        return;
-      }
+      // Ctrl+Shift+Enter runs current line / selection
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
         e.preventDefault();
-        const code = this.getCodeToRun('all');
+        const code = this.getCodeToRun('line');
         if (code) this.onRun(code);
         return;
       }
+      // Ctrl+Enter runs entire script (Run all)
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
-        const code = this.getCodeToRun('line');
+        const code = this.getCodeToRun('all');
         if (code) this.onRun(code);
         return;
       }
@@ -186,21 +214,35 @@ export class ScriptEditorView {
           const newPos = start + insertion.length;
           this.textarea.selectionStart = this.textarea.selectionEnd = newPos;
         }
+        this.saveCurrentCode();
         return;
       }
+
+      if (e.key === 'Escape') {
+        this.allowTabExit = true;
+        return;
+      }
+
       if (e.key === 'Tab') {
-        if (allowTabExit) {
-          allowTabExit = false;
-          return; // Let Tab / Shift+Tab move focus
+        if (e.shiftKey) {
+          // Allow Shift+Tab to exit backwards naturally
+          return;
+        }
+        if (this.allowTabExit) {
+          // Esc was pressed, allow Tab to exit forwards naturally
+          this.allowTabExit = false;
+          return;
         }
         e.preventDefault();
         const start = this.textarea.selectionStart;
         const end = this.textarea.selectionEnd;
-        this.textarea.value = this.textarea.value.substring(0, start) + '  ' + this.textarea.value.substring(end);
-        this.textarea.selectionStart = this.textarea.selectionEnd = start + 2;
+        this.textarea.value = this.textarea.value.substring(0, start) + '    ' + this.textarea.value.substring(end);
+        this.textarea.selectionStart = this.textarea.selectionEnd = start + 4;
+        this.saveCurrentCode();
         return;
       }
-      allowTabExit = false;
+
+      this.allowTabExit = false;
     });
   }
 }

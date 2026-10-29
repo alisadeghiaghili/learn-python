@@ -128,6 +128,7 @@ export class App {
   private checkResults: DockCheck[] = [];
   /** Reopens the UI guide after a highlight tour finishes (see openUiHelp). */
   private helpReopenTimer: number | null = null;
+  private theme: 'light' | 'dark' = 'dark';
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -169,6 +170,20 @@ export class App {
   /* —— Mounting & init —— */
 
   private init(): void {
+    try {
+      const savedTheme = localStorage.getItem('learn-python-theme') as 'light' | 'dark' | null;
+      if (savedTheme === 'light' || savedTheme === 'dark') {
+        this.theme = savedTheme;
+      } else if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) {
+        this.theme = 'light';
+      } else {
+        this.theme = 'dark';
+      }
+      document.documentElement.dataset.theme = this.theme;
+    } catch {
+      /* ignore */
+    }
+
     const params = new URLSearchParams(window.location.search);
     const savedLevel = safeGet(PROGRESS_KEY + '_last');
     const isSandboxParam = params.get('mode') === 'sandbox' || params.has('sandbox');
@@ -181,6 +196,8 @@ export class App {
     } else {
       this.enterSandbox();
     }
+
+    this.terminal.focus();
   }
 
   private mount(): void {
@@ -197,8 +214,15 @@ export class App {
             <img class="brand-logo" src="${brandLogoUrl}" width="22" height="22" alt="" />
             <span class="brand-text">learn<span class="brand-accent">python</span></span>
           </a>
-          <div class="level-title" id="level-title"></div>
+          <div class="level-nav-wrap">
+            <button type="button" class="btn-level-nav prev" data-action="prev-level" aria-label="Previous level" title="Previous level">◀</button>
+            <div class="level-title" id="level-title"></div>
+            <button type="button" class="btn-level-nav next" data-action="next-level" aria-label="Next level" title="Next level">▶</button>
+          </div>
           <div class="toolbar-actions">
+            <button type="button" class="theme-toggle" data-action="theme-toggle" aria-label="Toggle theme" title="Toggle theme">
+              <span class="theme-icon" aria-hidden="true">◐</span>
+            </button>
             <div class="lang-menu">
               <button type="button" class="lang-btn" data-action="lang-toggle" aria-haspopup="menu" aria-expanded="false" aria-label="${current.toUpperCase()} - ${escapeHtml(ui().language)}">
                 <span data-lang-label>${current.toUpperCase()}</span>
@@ -258,7 +282,7 @@ export class App {
     );
     this.terminal = new TerminalView(
       this.root.querySelector('#terminal')!,
-      (cmd) => this.handleCommand(cmd),
+      (cmd, options) => this.handleCommand(cmd, options),
       () => this.editor.toggle(),
     );
 
@@ -277,6 +301,18 @@ export class App {
         }
         if (action === 'lang-toggle') {
           this.toggleLang();
+          return;
+        }
+        if (action === 'theme-toggle') {
+          this.toggleTheme();
+          return;
+        }
+        if (action === 'prev-level') {
+          this.prevLevel();
+          return;
+        }
+        if (action === 'next-level') {
+          this.nextLevel();
           return;
         }
         this.closeNav();
@@ -352,15 +388,50 @@ export class App {
 
   /** Rebuild the shell so every chrome string re-renders in the active locale. */
   private remountAfterLocale(): void {
+    const prevLog = this.terminal ? this.terminal.getLog() : [];
+    const prevHistory = this.terminal ? this.terminal.getHistory() : [];
     if (this.level) {
       const raw = getLevel(this.level.id);
       if (raw) this.level = localizeLevel(raw);
     }
     this.mount();
+    if (this.terminal) {
+      this.terminal.setLog(prevLog);
+      this.terminal.setHistory(prevHistory);
+    }
     this.updateTitle();
     this.renderBoards();
     this.renderDock();
     this.terminal.focus();
+  }
+
+  private toggleTheme(): void {
+    this.theme = this.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = this.theme;
+    try {
+      localStorage.setItem('learn-python-theme', this.theme);
+    } catch {
+      /* ignore */
+    }
+    this.renderBoards();
+  }
+
+  private prevLevel(): void {
+    if (!this.level) return;
+    const all = allLevels();
+    const idx = levelIndex(this.level.id);
+    if (idx > 0) {
+      this.enterLevel(all[idx - 1]!.id);
+    }
+  }
+
+  private nextLevel(): void {
+    if (!this.level) return;
+    const all = allLevels();
+    const idx = levelIndex(this.level.id);
+    if (idx >= 0 && idx < all.length - 1) {
+      this.enterLevel(all[idx + 1]!.id);
+    }
   }
 
   /* —— Level / sandbox flow —— */
@@ -376,6 +447,7 @@ export class App {
     this.undoStack = [];
     this.terminal.clear();
     this.terminal.push('meta', ui().levelMeta(level.name));
+    this.editor.setLevel(level.id, level.start);
 
     try {
       const url = new URL(window.location.href);
@@ -441,19 +513,27 @@ export class App {
 
     this.session.reset();
     this.board.setPlots([]);
+    this.editor.setLevel('sandbox', '');
     this.renderBoards();
     this.renderDock();
     this.updateTitle();
   }
 
   private updateTitle(): void {
+    const prevBtn = this.root.querySelector<HTMLButtonElement>('[data-action="prev-level"]');
+    const nextBtn = this.root.querySelector<HTMLButtonElement>('[data-action="next-level"]');
     if (this.level) {
-      const idx = levelIndex(this.level.id) + 1;
+      const all = allLevels();
+      const idx = levelIndex(this.level.id);
       const u = ui();
       const eliText = u.eliBands[this.level.eli] ?? this.level.eli;
-      this.titleEl.innerHTML = `<h1 class="level-title-h1">${escapeHtml(u.titleLine(idx, this.level.name))}</h1> <span class="eli-badge eli-${this.level.eli}" title="ELI band: ${escapeHtml(eliText)}">${escapeHtml(eliText)}</span>`;
+      this.titleEl.innerHTML = `<h1 class="level-title-h1">${escapeHtml(u.titleLine(idx + 1, this.level.name))}</h1> <span class="eli-badge eli-${this.level.eli}" title="ELI band: ${escapeHtml(eliText)}">${escapeHtml(eliText)}</span>`;
+      if (prevBtn) prevBtn.disabled = idx <= 0;
+      if (nextBtn) nextBtn.disabled = idx >= all.length - 1;
     } else {
       this.titleEl.innerHTML = `<h1 class="level-title-h1">${escapeHtml(ui().sandboxTitle)}</h1>`;
+      if (prevBtn) prevBtn.disabled = true;
+      if (nextBtn) nextBtn.disabled = true;
     }
   }
 
@@ -510,7 +590,7 @@ export class App {
 
   /* —— Execution & verification —— */
 
-  private async executeCode(raw: string): Promise<void> {
+  private async executeCode(raw: string, options?: { alreadyEchoed?: boolean }): Promise<void> {
     const source = raw.replace(/\s+$/, '');
     if (!source.trim()) return;
 
@@ -519,7 +599,9 @@ export class App {
       return;
     }
 
-    this.terminal.push('cmd', `>>> ${source.replace(/\n/g, '\n... ')}`);
+    if (!options?.alreadyEchoed) {
+      this.terminal.push('cmd', `>>> ${source.replace(/\n/g, '\n... ')}`);
+    }
     if (this.undoStack.length >= 20) {
       this.undoStack.shift();
     }
@@ -745,8 +827,15 @@ export class App {
           this.terminal.push('meta', u.usageLevel);
           return;
         }
-        if (getLevel(id)) this.enterLevel(id);
-        else this.terminal.push('err', u.unknownLevel(id));
+        const num = parseInt(id, 10);
+        const all = allLevels();
+        if (!isNaN(num) && num >= 1 && num <= all.length) {
+          this.enterLevel(all[num - 1]!.id);
+        } else if (getLevel(id)) {
+          this.enterLevel(id);
+        } else {
+          this.terminal.push('err', u.unknownLevel(id));
+        }
         return;
       }
       case 'goal':
@@ -839,9 +928,9 @@ export class App {
 
   /* —— Modals —— */
 
-  handleCommand(cmd: string): void {
+  handleCommand(cmd: string, options?: { alreadyEchoed?: boolean }): void {
     // All terminal input is routed through runMeta or executeCode.
-    this.executeCode(cmd);
+    this.executeCode(cmd, options);
   }
 
   private openLevels(): void {
@@ -878,6 +967,9 @@ export class App {
     const modal = showModal({
       title: u.levelsTitle,
       bodyHtml: `<p>${u.levelsIntro}</p>
+        <div class="level-search-wrap">
+          <input type="search" class="level-search-input" id="level-search" placeholder="Search 78 levels by name, concept, or series..." aria-label="Search levels" autocomplete="off" />
+        </div>
         <div class="legend-box">
           <div class="next-title">${escapeHtml(u.howToRead)}</div>
           <ul class="legend-list">
@@ -887,16 +979,35 @@ export class App {
             <li><span class="start-mark">▶</span> ${escapeHtml(u.legendStart)}</li>
           </ul>
         </div>
-        ${body}`,
+        <div class="catalog-list" id="catalog-list">${body}</div>`,
       actions: [{ label: u.close, className: 'ghost', onClick: () => undefined }],
     });
 
-    // showModal focuses the footer button, which the browser scrolls into view —
-    // the tall catalog would land at its bottom. Reset to the top so the first
-    // exercise is what's visible.
+    const searchInput = modal.el.querySelector<HTMLInputElement>('#level-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', () => {
+        const query = searchInput.value.toLowerCase().trim();
+        modal.el.querySelectorAll<HTMLElement>('.series-block').forEach((block) => {
+          let hasVisibleInBlock = false;
+          block.querySelectorAll<HTMLElement>('.level-row').forEach((row) => {
+            const text = row.textContent?.toLowerCase() ?? '';
+            const match = !query || text.includes(query);
+            row.hidden = !match;
+            if (match) hasVisibleInBlock = true;
+          });
+          block.hidden = !hasVisibleInBlock;
+        });
+      });
+    }
+
     const panel = modal.el.querySelector<HTMLElement>('.modal');
-    panel?.scrollTo({ top: 0 });
-    requestAnimationFrame(() => panel?.scrollTo({ top: 0 }));
+    const activeRow = modal.el.querySelector<HTMLElement>('.level-row.active');
+    if (activeRow) {
+      requestAnimationFrame(() => activeRow.scrollIntoView({ block: 'center' }));
+    } else {
+      panel?.scrollTo({ top: 0 });
+      requestAnimationFrame(() => panel?.scrollTo({ top: 0 }));
+    }
 
     modal.el.querySelectorAll<HTMLButtonElement>('[data-level]').forEach((btn) => {
       btn.addEventListener('click', () => {
