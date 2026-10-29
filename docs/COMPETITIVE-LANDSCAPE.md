@@ -19,7 +19,7 @@ change often and are indicative only.
 
 | Tool | Price | Real interpreter | Memory-model visual | Goal-checked levels | NumPy / pandas / asyncio / threading | Farsi / German | Runs client-side | AI tutor | Scale |
 |---|---|---|---|---|---|---|---|---|---|
-| **learn-python** | Free, MIT | Dual-lane (TS simulator + Pyodide) | Stack, heap, RAM map (addresses, sizes, refs), buffer strips for views | Yes, 133 levels with par | All four + ecosystem | Both | Yes | Yes (PWA offline) | Active |
+| **learn-python** | Free, MIT | Dual-lane (TS simulator + Pyodide) | Stack, heap, RAM map (addresses, sizes, refs), buffer strips for views | Yes, 135 levels with par | All four + ecosystem | Both | Yes | Yes (PWA offline) | Active |
 | [Python Tutor](https://pythontutor.com/) | Free | Yes (server-side CPython 3.11) | Stack, heap, references; values in cells; step back/forward; current line | No | No (stdlib whitelist, no packages) | *unverified* | No | Reported, details *unverified* | 25M+ users |
 | [memory_graph](https://github.com/bterwijn/memory_graph) web debugger | Free, BSD-2 | Yes (Pyodide) | Reference graph, copies, mutability | No | NumPy, pandas yes; concurrency *unverified* | *unverified* | Yes | No | ~1.1k stars |
 | [Thonny](https://thonny.org/) | Free | Yes (desktop) | Variables + heap mode | No | No | *unverified* | Desktop | No | Large installed base |

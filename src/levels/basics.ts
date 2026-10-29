@@ -2,8 +2,8 @@
  * Series: First Steps (basics).
  *
  * The true start of the course. A learner who has never written Python enters
- * here: print, a value, a name, a little math, and a string. No memory-model
- * jargon yet — the canvas is there, but the story is about the code first.
+ * here: print, a value, a name, stepping through time, connecting memory to terminal,
+ * math, and strings. Gentle onboarding with immediate visual and terminal feedback.
  */
 
 import type { Sequence } from '../engine/types';
@@ -16,38 +16,104 @@ export const series: Sequence[] = [
       {
         id: 'hello-world',
         eli: 'eli5',
-        name: 'Hello, world',
-        brief: 'Print the line `Hello, world!` — the first thing every Python program does.',
+        name: 'First run: the terminal',
+        brief: 'Welcome to learn-python! Click the green Run button (or press Ctrl+Enter) to execute your first line of code and see its output in the Terminal.',
         hint: "print('Hello, world!')",
         start: '',
         par: 1,
         difficulty: 1,
         goal: { type: 'stdout', lines: ['Hello, world!'] },
         solution: "print('Hello, world!')",
-        lesson: `Python reads your code from top to bottom, one line at a time.
+        lesson: `Welcome to **learn-python**!
 
-\`print( ... )\` shows whatever is inside the parentheses. Wrap words in quotes — those quotes tell Python “this is text.” Press run and you’ll see your first line of output.
+Here is how your programming studio works:
+- On the left is your **Code Editor** where you write Python instructions.
+- Below is the **Terminal**, which displays the text output from your program.
+- In the dock below, the **Goal Checklist** shows what you need to accomplish.
 
-Everything in this course works this way: you write a line, run it, and watch what happens on the canvas and in the terminal.`,
+\`print( ... )\` shows whatever is inside the parentheses. Wrap words in quotes to tell Python “this is text.”
+
+Press the green **Run** button (or press **Ctrl+Enter**) to see your very first line of output appear in the terminal!`,
         learning: ['A program is a list of lines Python runs in order', 'Text (words) is written inside quotes'],
         fieldNotes: ['`print` is the fastest way to check what your code is doing', 'Quotes make a string; without them Python thinks you mean a name'],
       },
       {
         id: 'first-variable',
         eli: 'eli5',
-        name: 'Save a value',
-        brief: 'Save the number 5 under the name `score` with `score = 5`.',
+        name: 'Meet the canvas: your first variable',
+        brief: 'Save the number 5 under the name score with `score = 5`. Watch the Memory Board on the right create a labeled box in memory!',
         hint: 'score = 5',
         start: '',
         par: 1,
         difficulty: 1,
         goal: { type: 'vars', vars: { score: { type: 'int', repr: '5' } } },
         solution: 'score = 5',
-        lesson: `The \`=\` sign does not mean “equals” the way it does in math. It means **give this name a value**.
+        lesson: `The \`=\` sign does not mean “equals” the way it does in math. It means **store this value under this name**.
 
-\`score = 5\` attaches the number 5 to the name \`score\`. From now on, anywhere you type \`score\`, Python uses the number 5. The name is a little label stuck on a value.`,
+\`score = 5\` stores the number 5 under the name \`score\`.
+
+**Look at the Memory Board on the right:**
+As soon as you run this line, a box labeled \`score\` appears on the Stack holding the number 5. You have just allocated your first piece of computer memory!`,
         learning: ['`=` saves a value under a name', 'Afterwards the name stands for that value'],
         fieldNotes: ['Names are usually lowercase: `score`, `total`, `count`', 'The label points at the value — change the value and the label still applies'],
+      },
+      {
+        id: 'step-time-travel',
+        eli: 'eli5',
+        name: 'Time travel with Step',
+        brief: 'Run `turn = 1`, then `turn = 2`, and finally `turn = 3`. Use the Step button or drag the time slider to travel through execution history.',
+        hint: 'turn = 3',
+        start: 'turn = 1\nturn = 2',
+        par: 1,
+        difficulty: 1,
+        goal: { type: 'vars', vars: { turn: { type: 'int', repr: '3' } } },
+        solution: 'turn = 3',
+        lesson: `Programs run one line at a time, moving forward like a story.
+
+In this tool, you have a superpower: **time travel**.
+- Click **Step** (or the forward arrow) to advance one line.
+- Click **Back** (or the backward arrow) to step backward in time.
+- Drag the **Time Slider** below the canvas to jump directly to any moment in the program.
+
+**Look at the Memory Board:**
+Notice the yellow execution arrow on the left of your code. As you step from line to line, the box for \`turn\` updates its value on the canvas in real time: first 1, then 2, and finally 3!`,
+        learning: [
+          'Programs execute line by line from top to bottom',
+          'The Step buttons and time slider let you inspect memory at any point in history',
+        ],
+        fieldNotes: [
+          'Stepping line by line is how professional developers debug complex logic',
+          'At any tick in time, the Memory Board reflects the exact state of your program at that moment',
+        ],
+      },
+      {
+        id: 'connect-terminal-memory',
+        eli: 'eli5',
+        name: 'From memory to terminal',
+        brief: 'Print the value stored in memory! Add the second line: `print(hero)`. Watch Python look up the value of `hero` in memory and display it in the terminal.',
+        hint: 'print(hero)',
+        start: 'hero = "Ada"',
+        par: 1,
+        difficulty: 1,
+        goal: { type: 'stdout', lines: ['Ada'] },
+        solution: 'print(hero)',
+        lesson: `Now you can connect all parts of the tool together!
+
+1. Line 1 (\`hero = "Ada"\`) reserves a spot in memory and labels it \`hero\`.
+2. Line 2 (\`print(hero)\`) tells Python: "Find the box named \`hero\` in memory, get whatever is inside, and send it to the terminal."
+
+**Watch the whole picture:**
+- The **Code Editor** holds your instructions.
+- The **Memory Board** shows what is stored in the computer's memory.
+- The **Terminal** shows the text output produced by your program.`,
+        learning: [
+          'print(name) retrieves the value from memory and sends it to the terminal',
+          'The editor, memory board, and terminal work together as a complete programming studio',
+        ],
+        fieldNotes: [
+          'Notice there are no quotes around hero in print(hero); quotes would print the literal word "hero" instead of its value',
+          'Passing variable names to print() is the universal way to inspect program state',
+        ],
       },
       {
         id: 'change-a-value',

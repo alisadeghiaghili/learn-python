@@ -10,24 +10,54 @@ export const deG1: LevelGroup = {
   deepLessons: {},
   levels: {
     'hello-world': {
-      name: 'Hallo, Welt',
-      brief: 'Gib die Zeile `Hello, world!` aus — das Erste, was jedes Python-Programm macht.',
-      lesson: `Python liest deinen Code von oben nach unten, eine Zeile nach der anderen.
+      name: 'Erster Lauf: Das Terminal',
+      brief: 'Klicke auf den grünen Run-Button (oder drücke Strg+Enter), um dein erstes Programm auszuführen und die Ausgabe im Terminal zu sehen.',
+      lesson: `Willkommen bei **learn-python**!
 
-\`print( ... )\` zeigt, was in den Klammern steht. Setze Wörter in Anführungszeichen — sie sagen Python: „Das ist Text." Drücke auf Ausführen, und du siehst deine erste Ausgabe-Zeile.
+Im Code-Editor schreibst du deine Anweisungen. Das Terminal darunter zeigt die Textausgabe deines Programms.
 
-So funktioniert alles in diesem Kurs: Du schreibst eine Zeile, führst sie aus und beobachtest, was auf dem Canvas und im Terminal passiert.`,
+\`print( ... )\` zeigt, was in den Klammern steht. Setze Wörter in Anführungszeichen — sie sagen Python: „Das ist Text."
+
+Klicke auf den grünen **Run**-Button (oder drücke **Strg+Enter**), um deine erste Ausgabezeile im Terminal zu sehen!`,
       learning: ['Ein Programm ist eine Liste von Zeilen, die Python in Reihenfolge ausführt', 'Text (Wörter) wird in Anführungszeichen geschrieben'],
       fieldNotes: ['`print` ist der schnellste Weg, zu prüfen, was dein Code tut', 'Anführungszeichen machen aus etwas einen String; ohne sie denkt Python, du meinst einen Namen'],
     },
     'first-variable': {
-      name: 'Einen Wert speichern',
-      brief: 'Speichere die Zahl 5 unter dem Namen `score` mit `score = 5`.',
+      name: 'Der Speicher: Deine erste Variable',
+      brief: 'Speichere die Zahl 5 unter dem Namen score mit `score = 5`. Beobachte das Speicher-Board rechts!',
       lesson: `Das Zeichen \`=\` bedeutet nicht „gleich" wie in der Mathematik. Es bedeutet: **Gib diesem Namen einen Wert**.
 
-\`score = 5\` hängt die Zahl 5 an den Namen \`score\`. Ab jetzt, überall wo du \`score\` tippst, verwendet Python die Zahl 5. Der Name ist wie ein kleines Etikett, das an einem Wert klebt.`,
+\`score = 5\` hängt die Zahl 5 an den Namen \`score\`.
+
+Sobald du diese Zeile ausführst, erscheint im Speicher-Board rechts auf dem Stack ein Kasten mit dem Namen \`score\`, der die Zahl 5 enthält.`,
       learning: ['`=` speichert einen Wert unter einem Namen', 'Danach steht der Name für diesen Wert'],
       fieldNotes: ['Namen sind in der Regel kleingeschrieben: `score`, `total`, `count`', 'Das Etikett zeigt auf den Wert — änderst du den Wert, gilt das Etikett weiter'],
+    },
+    'step-time-travel': {
+      name: 'Zeitreise mit Step',
+      brief: 'Führe den Code Zeile für Zeile mit dem Step-Button aus oder ziehe den Zeitschieberegler, um die Entwicklung der Variablen im Speicher zu verfolgen.',
+      learning: [
+        'Programme werden strikt Zeile für Zeile von oben nach unten ausgeführt',
+        'Mit den Step-Buttons und dem Schieberegler kannst du zu jedem Zeitpunkt der Ausführung springen',
+      ],
+      fieldNotes: [
+        'Das schrittweise Ausführen (Stepping) ist das wichtigste Werkzeug für Entwickler bei der Fehlersuche',
+        'Das Memory-Board zeigt zu jedem Zeitschritt den exakten Speicherzustand',
+      ],
+      lesson: 'Python liest deinen Code Zeile für Zeile wie eine Geschichte. Mit dem **Step-Button** und dem Zeitschieberegler kannst du die Ausführung schrittweise vor- und zurückspulen und im Speicher-Board zusehen, wie sich `turn` von 1 über 2 auf 3 ändert.',
+    },
+    'connect-terminal-memory': {
+      name: 'Vom Speicher ins Terminal',
+      brief: 'Lies den Wert aus dem Speicher aus und gib ihn im Terminal aus. Füge die Zeile `print(hero)` hinzu.',
+      learning: [
+        'print(name) liest den Wert der Variablen aus dem Speicher und gibt ihn im Terminal aus',
+        'Editor, Speicher-Board und Terminal bilden zusammen dein komplettes Studio',
+      ],
+      fieldNotes: [
+        'Setze keine Anführungszeichen um hero in print(hero); sonst würde das Wort "hero" statt seines Werts ausgegeben',
+        'Variablen an print() zu übergeben ist die universelle Methode zur Inspektion',
+      ],
+      lesson: 'Jetzt greifen alle Werkzeuge ineinander: Zeile 1 (`hero = "Ada"`) speichert den Text im RAM. Zeile 2 (`print(hero)`) schlägt den Namen im Speicher nach und schickt den Inhalt direkt an das Terminal!',
     },
     'change-a-value': {
       name: 'Einen Wert ändern',
