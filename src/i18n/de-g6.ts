@@ -17,6 +17,7 @@ export const deG6: LevelGroup = {
     'testing-pytest': 'Testen mit Pytest & Mocks',
     sqlalchemy: 'SQLAlchemy & Identity Map',
     production: 'Produktion & Architektur',
+    oop: 'Objektorientierte Programmierung (OOP)',
   },
   deepLessons: {
     slicing: `## Beginner: Die Grundlagen des Slicings
@@ -149,6 +150,51 @@ Fremdschlüssel und \`relationship()\` ermöglichen die Navigation zwischen verk
 ## Expert: Das Identity-Map-Muster
 Die Identity Map stellt sicher, dass wiederholte Abfragen desselben Primärschlüssels dieselbe Objektinstanz im Speicher zurückgeben: \`u1 is u2\` ist wahr!`,
 
+    oop: `## Beginner: Klassen als Baupläne und Objekte auf dem Heap
+Eine Klasse definiert Datenstruktur und Verhalten. Beim Aufruf der Klasse wird eine Instanz auf dem Heap erzeugt:
+\`\`\`python
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+p1 = Point(1, 2)
+p2 = Point(1, 2)
+print(p1 is p2)  # False: zwei getrennte Heap-Objekte!
+\`\`\`
+Jede Instanz besitzt eine eindeutige Adresse, Referenzzähler und ein Attribut-Dictionary.
+
+## Intermediate: Der Lebenszyklus einer Instanz und __init__
+Bei der Instanziierung:
+1. \`__new__()\` reserviert den Speicher für das Instanz-Objekt auf dem Heap.
+2. \`__init__()\` initialisiert die Felder der Instanz über \`self\`.
+3. Die Referenz auf das Objekt wird an den Aufrufer zurückgegeben.
+
+\`self\` ist kein Schlüsselwort, sondern der explizite Name der aktuellen Instanz.
+
+## Advanced: Methodenbindung, Kapselung und Vererbung mit super()
+Methoden binden Verhalten an Zustand:
+\`\`\`python
+class Animal:
+    def sound(self):
+        return "generic"
+
+class Dog(Animal):
+    def sound(self):
+        return "woof"
+\`\`\`
+Wird \`d = Dog()\` aufgerufen, bindet Python die Methode an die Instanz \`d\`.
+
+Subklassen erben Methoden und können diese überschreiben oder mit \`super()\` erweitern.
+
+## Expert: Attributauflösung, Namensraum-Shadowing und MRO
+Die Attributsuche folgt einer festen Reihenfolge:
+1. Prüfe das Instanz-Dictionary (\`inst.__dict__\`).
+2. Prüfe das Klassen-Dictionary (\`type(inst).__dict__\`).
+3. Durchlaufe die Method Resolution Order (MRO) der Basisklassen.
+
+Eine Zuweisung \`inst.attr = val\` schreibt in Schritt 1 und überdeckt (shadowt) das Klassenattribut.`,
+
     production: `## Beginner: Das 12-Factor-Prinzip
 Konfigurationen gehören in Umgebungsvariablen (\`os.environ\`), getrennt vom Quellcode.
 
@@ -162,6 +208,72 @@ Mit \`Depends()\` werden Abhängigkeiten wie Datenbankverbindungen modular in En
 Strukturierte JSON-Logs, Health-Checks und saubere Graceful-Shutdown-Routinen sichern den Betrieb.`,
   },
   levels: {
+    'oop-class-instance': {
+      name: 'Klasse und Instanz',
+      brief: 'Instanziiere `bot = Robot()`. Beobachte die Klassendefinition und das neu erzeugte Instanz-Objekt auf dem Heap.',
+      learning: [
+        'Eine Klasse ist ein Bauplan; ihr Aufruf erzeugt eine neue Instanz auf dem Heap',
+        'Jede Instanz besitzt eine eindeutige Identität und Adresse',
+      ],
+      fieldNotes: [
+        'Klassen selbst sind erstklassige Objekte auf dem Heap in Python',
+        'Leere Klassen mit pass werden häufig als benutzerdefinierte Ausnahmen verwendet',
+      ],
+      lesson: 'Eine **Klasse** ist ein Bauplan und eine **Instanz** das daraus erzeugte konkrete Objekt. Beim Aufruf von `Robot()` allokiert Python ein neues Instanz-Objekt auf dem Heap.',
+    },
+    'oop-init-attributes': {
+      name: 'Initialisierung mit __init__',
+      brief: 'Erzeuge `p = Point(3, 4)` und berechne `dist_sum = p.x + p.y`. Sieh, wie `self` Attribute an die Instanz bindet.',
+      learning: [
+        '__init__ initialisiert den Zustand der neu erzeugten Instanz',
+        'self verweist auf die spezifische Instanz, die initialisiert wird',
+      ],
+      fieldNotes: [
+        '__init__ muss immer None zurückgeben, andernfalls wird ein TypeError ausgelöst',
+        'Instanzattribute werden im internen Wörterbuch (__dict__) gespeichert',
+      ],
+      lesson: 'Die Methode `__init__` ist der Konstruktor in Python. Bei `Point(3, 4)` wird die Instanz als `self` übergeben und `self.x = x` weist das Attribut dem Instanz-Dictionary zu.',
+    },
+    'oop-methods-self': {
+      name: 'Methoden und Kapselung',
+      brief: 'Erzeuge `c = Counter()` und rufe `val = c.increment(5)` auf, um den inneren Zustand der Instanz zu verändern.',
+      learning: [
+        'Methoden erhalten die aufrufende Instanz automatisch als self',
+        'c.method(arg) ist syntaktischer Zucker für Class.method(c, arg)',
+      ],
+      fieldNotes: [
+        'Methoden kapseln den internen Zustand und schützen Objekt-Invarianten',
+        'Vermeide es, Zustand außerhalb von self ohne triftigen Grund zu mutieren',
+      ],
+      lesson: 'Eine Methode ist eine in einer Klasse definierte Funktion. Der Aufruf `c.increment(5)` wird intern zu `Counter.increment(c, 5)` übersetzt, wobei `c` als `self` übergeben wird.',
+    },
+    'oop-inheritance-super': {
+      name: 'Vererbung und super()',
+      brief: 'Erzeuge `car = ElectricCar("Tesla", 75)` und rufe `msg = car.start()` auf. Sieh die Vererbung und Weiterleitung an den Basiskonstruktor.',
+      learning: [
+        'Subklassen erben Attribute und Methoden von Basisklassen',
+        'super() delegiert Methodenaufrufe entlang der Method Resolution Order (MRO)',
+      ],
+      fieldNotes: [
+        'Komposition ist in Produktivsystemen oft tiefer Vererbung vorzuziehen',
+        'super() gewährleistet kooperative Mehrfachvererbung in Python',
+      ],
+      lesson: 'Durch Vererbung übernimmt `ElectricCar` Methoden und Attribute der Basisklasse `Vehicle`. `super().__init__(brand)` delegiert die Initialisierung an die Elternklasse.',
+    },
+    'oop-class-vs-instance': {
+      name: 'Klassenattribute vs. Instanzattribute',
+      brief: 'Erzeuge `a1 = Account("Alice", 100)` und `a2 = Account("Bob", 200)`. Überschreibe `a1.rate = 0.07` und prüfe `is_shared = (Account.rate == a2.rate)`.',
+      learning: [
+        'Klassenattribute werden auf dem Klassenobjekt gespeichert und geteilt',
+        'Zuweisungen an instance.attr erzeugen ein instanzlokales Attribut, das das Klassenattribut überdeckt',
+      ],
+      fieldNotes: [
+        'Mutationen an veränderlichen Klassenattributen betreffen alle Instanzen',
+        'Klassenattribute eignen sich für Konstanten oder Zähler, Instanzattribute für Objektdaten',
+      ],
+      lesson: 'Klassenattribute wie `rate = 0.05` liegen auf dem Klassenobjekt selbst. Die Zuweisung `a1.rate = 0.07` erzeugt ein instanzlokales Attribut, das das Klassenattribut ausschließlich für `a1` überdeckt.',
+    },
+
     'slice-start-stop': {
       name: 'Einfacher Slice erzeugt eine Kopie',
       brief: 'Extrahiere `sub = xs[1:4]` aus `xs`. Beobachte auf dem Speicherboard, dass `sub` eine völlig neue Liste auf dem Heap ist.',

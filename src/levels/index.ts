@@ -30,6 +30,7 @@ import { series as docstrings } from './docstrings';
 import { series as testingPytest } from './testing-pytest';
 import { series as sqlalchemy } from './sqlalchemy';
 import { series as production } from './production';
+import { series as oop } from './oop';
 
 /**
  * All series, in teaching order.
@@ -55,6 +56,7 @@ export const sequences: Sequence[] = [
   ...copySemantics,
   ...iterators,
   ...functional,
+  ...oop,
   ...numpy,
   ...pandas,
   ...slicing,
