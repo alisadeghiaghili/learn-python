@@ -801,10 +801,23 @@ button.ghost,
     var(--bg);
 }
 
-.canvas-wrap svg {
+.canvas-wrap svg,
+.plot-card .plot-svg,
+#canvas,
+#ram-canvas {
   display: block;
   min-width: 320px;
   max-width: 100%;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.canvas-wrap svg text,
+.plot-card .plot-svg text,
+#canvas text,
+#ram-canvas text {
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 .ref-edge {

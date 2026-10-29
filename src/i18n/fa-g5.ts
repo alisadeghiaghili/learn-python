@@ -3,7 +3,7 @@ import type { LevelGroup } from './types';
 export const faG5: LevelGroup = {
   seriesTitles: {
     asyncio: 'Asyncio: coroutine‌ها، task‌ها و event loop',
-    threading: 'Threading: threadها، وضعیتِ مشترک و data race',
+    threading: 'Threading: thread‌ها، وضعیت مشترک و data race',
   },
   deepLessons: {
     asyncio: `## Beginner

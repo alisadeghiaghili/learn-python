@@ -798,6 +798,27 @@ function addText(parent: SVGElement, x: number, y: number, text: string, fill: s
   t.setAttribute('text-anchor', anchor);
   t.setAttribute('dominant-baseline', baseline);
   t.setAttribute('font-family', family);
-  t.textContent = text;
+  t.setAttribute('direction', 'ltr');
+  t.setAttribute('unicode-bidi', 'isolate');
+
+  if (/[\u0600-\u06FF]/.test(text)) {
+    while (t.firstChild) t.removeChild(t.firstChild);
+    const parts = text.split(/([\u0600-\u06FF\s،؛؟«»]+)/);
+    for (const part of parts) {
+      if (!part) continue;
+      const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+      if (/[\u0600-\u06FF]/.test(part)) {
+        tspan.setAttribute('direction', 'rtl');
+        tspan.setAttribute('unicode-bidi', 'isolate');
+      } else {
+        tspan.setAttribute('direction', 'ltr');
+        tspan.setAttribute('unicode-bidi', 'isolate');
+      }
+      tspan.textContent = part;
+      t.appendChild(tspan);
+    }
+  } else {
+    t.textContent = text;
+  }
   parent.appendChild(t);
 }

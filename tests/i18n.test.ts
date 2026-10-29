@@ -1,3 +1,4 @@
+import { JSDOM } from 'jsdom';
 /**
  * i18n coverage invariants. English lives in the series source files (the `en`
  * catalog's levels/seriesTitles/deepLessons are intentionally empty), so we check
@@ -56,3 +57,34 @@ for (const { name, cat } of locales) {
     }
   });
 }
+
+test('[fa] Persian strings enforce ZWNJ discipline and contain no untranslated level titles', () => {
+  const disallowedAffixes = [/\bمی\s+/g, /\bنمی\s+/g, /\s+هایش\b/g];
+  for (const [id, copy] of Object.entries(fa.levels)) {
+    const text = `${copy.name} ${copy.brief} ${copy.lesson ?? ''}`;
+    for (const pat of disallowedAffixes) {
+      expect(text.match(pat), `[fa] level '${id}' has missing ZWNJ for pattern ${pat}`).toBeNull();
+    }
+    if (id !== 'if-else') {
+      expect(/[\u0600-\u06FF]/.test(copy.name), `[fa] level '${id}' name is not translated to Persian: ${copy.name}`).toBe(true);
+    }
+  }
+  for (const [seqId, title] of Object.entries(fa.seriesTitles)) {
+    expect(/[\u0600-\u06FF]/.test(title), `[fa] series '${seqId}' title is not translated to Persian: ${title}`).toBe(true);
+  }
+});
+
+test('[ui] board and ram canvases have LTR direction and unicode-bidi isolation attributes', () => {
+  const dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></html>');
+  const root = dom.window.document.getElementById('root')!;
+  root.innerHTML = `
+    <svg id="canvas" xmlns="http://www.w3.org/2000/svg" direction="ltr" style="direction: ltr; unicode-bidi: isolate;"></svg>
+    <svg id="ram-canvas" xmlns="http://www.w3.org/2000/svg" direction="ltr" style="direction: ltr; unicode-bidi: isolate;"></svg>
+  `;
+  const canvas = root.querySelector('#canvas') as any;
+  const ramCanvas = root.querySelector('#ram-canvas') as any;
+  expect(canvas?.getAttribute('direction')).toBe('ltr');
+  expect(canvas?.style.direction).toBe('ltr');
+  expect(ramCanvas?.getAttribute('direction')).toBe('ltr');
+  expect(ramCanvas?.style.direction).toBe('ltr');
+});

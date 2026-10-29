@@ -102,7 +102,7 @@ function plotSvg(spec: PlotSpec): string {
     : '';
 
   const summary = `${spec.title ? spec.title + ': ' : ''}${spec.kind} plot with ${pts.length} points, x from ${fmtTick(xmin)} to ${fmtTick(xmax)}, y from ${fmtTick(ymin)} to ${fmtTick(ymax)}`;
-  return `<svg class="plot-svg" viewBox="0 0 ${W} ${H}" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${escapeHtml(summary)}"><title>${escapeHtml(summary)}</title><desc>${escapeHtml(summary)}</desc>${title}${grid}${axes}${ticks}${series}</svg>`;
+  return `<svg class="plot-svg" viewBox="0 0 ${W} ${H}" width="100%" xmlns="http://www.w3.org/2000/svg" role="img" direction="ltr" style="direction: ltr; unicode-bidi: isolate;" aria-label="${escapeHtml(summary)}"><title>${escapeHtml(summary)}</title><desc>${escapeHtml(summary)}</desc>${title}${grid}${axes}${ticks}${series}</svg>`;
 }
 
 export type BoardTab = 'memory' | 'plot' | 'ram';
@@ -432,7 +432,7 @@ export class BoardView {
       <div class="board-body">
         <div class="board-pane${this.currentTab === 'memory' ? ' is-active' : ''}" data-pane="memory" id="pane-memory" role="tabpanel" aria-labelledby="tab-memory" tabindex="0">
           <div class="canvas-wrap" id="memory-canvas-wrap">
-            <svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python memory visualization canvas"></svg>
+            <svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python memory visualization canvas" direction="ltr" style="direction: ltr; unicode-bidi: isolate;"></svg>
             <div class="sr-only live-desc" id="board-live-region" aria-live="polite"></div>
             <div class="sr-only text-alternative" id="board-text-alt"></div>
           </div>
@@ -441,7 +441,7 @@ export class BoardView {
           <div class="plot-stage" id="plot-stage" tabindex="0" role="region" aria-label="Data plot view"></div>
         </div>
         <div class="board-pane${this.currentTab === 'ram' ? ' is-active' : ''}" data-pane="ram" id="pane-ram" role="tabpanel" aria-labelledby="tab-ram" tabindex="0">
-          <div class="canvas-wrap"><svg id="ram-canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python RAM byte layout view"></svg></div>
+          <div class="canvas-wrap"><svg id="ram-canvas" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Python RAM byte layout view" direction="ltr" style="direction: ltr; unicode-bidi: isolate;"></svg></div>
         </div>
       </div>
       <div class="step-bar" id="step-bar" hidden>

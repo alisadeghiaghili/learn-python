@@ -2,15 +2,15 @@ import type { LevelGroup } from './types';
 
 export const faG3: LevelGroup = {
   seriesTitles: {
-    'copy-semantics': 'سémantik-e kopii (shallow و deep)',
-    'iterators': 'iterators و iterables',
-    'functional': 'default‌ها و ابزارهای تابعی',
+    'copy-semantics': 'معناشناسی کپی (سطحی و عمیق)',
+    'iterators': 'تکرارکننده‌ها و پیمایش‌پذیرها (Iterators)',
+    'functional': 'رفتارهای پیش‌فرض و ابزارهای تابعی',
     'plotting': 'نمودارکشی و Capstone',
   },
   deepLessons: {},
   levels: {
     'shallow-copy-dict': {
-      name: 'Shallow copy',
+      name: 'کپی سطحی (Shallow copy)',
       brief: 'یک dict که list تو در داخل دارد را با شالو-کپی کپی کنید. `b` یک dict *جدید* می‌شود، ولی همچنان به **همان** list داخلیِ `a` اشاره می‌کند. ببینید که دو یال کهربایی به یک جعبه‌ی list می‌رسند.',
       learning: ['یک shallow copy یک ظرف بیرونی جدید است', 'ظرف‌های تو در داخل، شریک‌اند، نه کپی‌شده'],
       fieldNotes: ['`.copy()` و `copy.copy()` هر دو shallow‌اند', 'به‌همین‌خاطر است که تغییردادن یک عنصر تودرتو از یک shallow copy «نشت» می‌کند'],
@@ -19,7 +19,7 @@ export const faG3: LevelGroup = {
 بوم را تماشا کنید: دو dict، یک جعبه‌ی list مشترک در میان، و دو یال کهربایی که به آن می‌رسند. آن «فرزند مشترک» کل ایده‌ی «shallow» است — سطح کپی می‌شود، اما درون، شریک است.`,
     },
     'deep-copy-independence': {
-      name: 'Deep copy',
+      name: 'کپی عمیق (Deep copy)',
       brief: '`a` را با دیپ-کپی کپی کنید تا `b` **کاملاً مستقل** شود — حتی list داخلی یک شیء جداگانه می‌شود. هیچ جعبه‌ای بین این دو شریک نیست.',
       learning: ['یک deep copy، ظرف‌های تو در داخل را به‌شکل بازگشتی (recursively) کلون می‌کند', 'بعد از یک deep copy، هیچ چیزی شریک نیست'],
       fieldNotes: ['`copy.deepcopy` همان چیزی است که پیش از تغییردادن ساختاری که مال شما نیست، به دستش می‌زنید', 'Shallow سریع‌تر است ولی شیءهای درونی را شریک می‌کند — deep کندتر است ولی امن'],
