@@ -43,6 +43,23 @@ class Parser {
     return false;
   }
 
+  /**
+   * Parse the rest of a slice after a `:` has been consumed: an optional
+   * `stop`, an optional `: step`, then the closing `]`. Any part may be
+   * omitted, so `[::2]`, `[::-1]`, `[1:4:2]`, and `[4:0:-1]` all parse.
+   */
+  private parseSlice(object: AstNode, start: AstNode | null, line: number, attr?: string): AstNode {
+    const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null
+      : this.peek()?.type === 'OP' && this.peek().value === ':' ? null
+      : this.parseExpr();
+    let step: AstNode | null = null;
+    if (this.eatOp(':')) {
+      step = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
+    }
+    this.expect('OP', ']');
+    return { kind: 'Slice', object, start, stop, step, line, attr };
+  }
+
   /** Parse a full module (sequence of simple statements / defs). */
   parseModule(): AstNode[] {
     const body: AstNode[] = [];
@@ -106,6 +123,16 @@ class Parser {
       this.next();
       this.eatNewline();
       return { kind: 'Continue', line: tok.line };
+    }
+    if (tok.type === 'KEYWORD' && tok.value === 'global') {
+      this.next();
+      const names: string[] = [];
+      if (this.peek() && this.peek().type !== 'NEWLINE') {
+        names.push(this.expect('NAME').value);
+        while (this.eatOp(',')) names.push(this.expect('NAME').value);
+      }
+      this.eatNewline();
+      return { kind: 'Global', names, line: tok.line };
     }
     return this.parseSimpleStatement();
   }
@@ -406,19 +433,19 @@ class Parser {
         pendingAttr = null;
         let index: AstNode | null = null;
         if (!(this.peek()?.type === 'OP' && this.peek().value === ']')) {
+          // A slice is a `:` we saw, otherwise a plain index. `parseSlice`
+          // consumes the opening `:` and the closing `]`, handling any omitted
+          // part (e.g. `[1:3]`, `[::2]`, `[::-1]`, `[4:0:-1]`).
           if (this.peek()?.type === 'OP' && this.peek().value === ':') {
-            this.next();
-            const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
-            this.expect('OP', ']');
-            node = { kind: 'Slice', object: attrBase, start: null, stop, line: tok.line, attr };
+            const start = null;
+            this.next(); // consume the first ':'
+            node = this.parseSlice(attrBase, start, tok.line, attr);
             continue;
           }
           const start = this.parseExpr();
           if (this.peek()?.type === 'OP' && this.peek().value === ':') {
-            this.next();
-            const stop = this.peek()?.type === 'OP' && this.peek().value === ']' ? null : this.parseExpr();
-            this.expect('OP', ']');
-            node = { kind: 'Slice', object: attrBase, start, stop, line: tok.line, attr };
+            this.next(); // consume the ':'
+            node = this.parseSlice(attrBase, start, tok.line, attr);
             continue;
           }
           index = start;

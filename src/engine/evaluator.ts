@@ -167,6 +167,54 @@ function iterableToRtValues(v: RtValue, state: MemoryState, line: number): RtVal
   if (['list', 'tuple', 'set'].includes(obj.type)) {
     return [...(obj.value as RtValue[])];
   }
+  // Iterating a dict yields its keys, like CPython.
+  if (obj.type === 'dict' || obj.type === 'defaultdict') {
+    return (obj.value as Array<[string, RtValue]>).map(([k]) => keyToValue(k, state));
+  }
+  throw new Error(`TypeError: '${obj.type}' object is not iterable (line ${line})`);
+}
+
+/**
+ * Consume any iterable value into the elements `list()` should hold: a
+ * container (list/tuple/set), a range, a dict-`keys` list, or an iterator
+ * (iter/map/filter, drained via `next`). Null yields the empty list.
+ */
+function drainIterable(v: RtValue | null, state: MemoryState, line: number): RtValue[] {
+  if (v === null || v === undefined) return [];
+  if (typeof v !== 'string') {
+    throw new Error(`TypeError: '${typeName(v, state)}' object is not iterable (line ${line})`);
+  }
+  const obj = state.heap[v];
+  if (!obj) {
+    const s = v as string;
+    const out: RtValue[] = [];
+    for (let i = 0; i < s.length; i++) out.push(allocString(s[i]!, state));
+    return out;
+  }
+  if (obj.type === 'str') {
+    const s = obj.value as string;
+    const out: RtValue[] = [];
+    for (let i = 0; i < s.length; i++) out.push(allocString(s[i]!, state));
+    return out;
+  }
+  if (['list', 'tuple', 'set'].includes(obj.type)) {
+    return [...(obj.value as RtValue[])];
+  }
+  if (obj.type === 'dict' || obj.type === 'defaultdict') {
+    return (obj.value as Array<[string, RtValue]>).map(([k]) => keyToValue(k, state));
+  }
+  if (isIteratorType(obj.type)) {
+    const items: RtValue[] = [];
+    for (;;) {
+      try {
+        items.push(nextIterator(v, state, line));
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('StopIteration')) break;
+        throw e;
+      }
+    }
+    return items;
+  }
   throw new Error(`TypeError: '${obj.type}' object is not iterable (line ${line})`);
 }
 
@@ -309,6 +357,11 @@ function execStatement(node: AstNode, state: MemoryState): void {
       throw new PyContinue();
     case 'Pass':
       return;
+    case 'Global': {
+      const frame = currentFrame(state);
+      frame.globalNames = [...new Set([...(frame.globalNames ?? []), ...node.names])];
+      return;
+    }
     default:
       throw new Error(`RuntimeError: unsupported statement ${node.kind}`);
   }
@@ -373,7 +426,10 @@ function lookupName(name: string, state: MemoryState, line: number): RtValue {
  */
 function bindTarget(target: AstNode, value: RtValue, state: MemoryState): void {
   if (target.kind === 'Name') {
-    setFrameLocal(currentFrame(state), target.id, value);
+    // A name declared `global` binds on the module frame, not the local one.
+    const cur = currentFrame(state);
+    const frame = cur.globalNames?.includes(target.id) ? state.frames[0]! : cur;
+    setFrameLocal(frame, target.id, value);
     return;
   }
   if (target.kind === 'Subscript') {
@@ -517,8 +573,9 @@ function evalExpr(node: AstNode, state: MemoryState): RtValue {
       const objId = evalExpr(node.object, state);
       const start = node.start ? evalExpr(node.start, state) : null;
       const stop = node.stop ? evalExpr(node.stop, state) : null;
+      const step = node.step ? evalExpr(node.step, state) : null;
       if (node.attr === 'iloc') return frameIlocSlice(objId as string, start, stop, state, node.line);
-      return sliceGet(objId, start, stop, state, node.line);
+      return sliceGet(objId, start, stop, step, state, node.line);
     }
     case 'Attribute':
       // Method references are only ever immediately called; resolve in evalCall.
@@ -574,12 +631,11 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
       return truthy(args[0], state);
     }
     if (name === 'abs') {
+      if (args.length !== 1) throw new Error(`TypeError: abs() takes exactly one argument (line ${node.line})`);
       return Math.abs(derefNumber(args[0], state));
     }
     if (name === 'min' || name === 'max') {
-      const nums = readNumberSeries(args[0], state);
-      if (nums.length === 0) throw new Error(`ValueError: ${name}() arg is an empty sequence (line ${node.line})`);
-      return name === 'min' ? Math.min(...nums) : Math.max(...nums);
+      return minMaxBuiltin(name, args, state, node.line);
     }
     if (name === 'range') {
       return makeRange(args, state, node.line);
@@ -600,15 +656,9 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
       return reduce(args, state, node.line);
     }
     if (name === 'list') {
-      const obj = allocObject('list', Array.isArray(args[0]) ? [...(args[0] as unknown as RtValue[])] : [], '');
+      const items = drainIterable(args.length > 0 ? args[0] : null, state, node.line);
+      const obj = allocObject('list', items, '');
       state.heap[obj.id] = obj;
-      // list(iterable) — only list/tuple/set
-      if (typeof args[0] === 'string' && state.heap[args[0] as string]) {
-        const src = state.heap[args[0] as string];
-        if (['list', 'tuple', 'set'].includes(src.type)) {
-          obj.value = [...(src.value as RtValue[])];
-        }
-      }
       obj.repr = formatObject(obj, state);
       return obj.id;
     }
@@ -683,6 +733,9 @@ function evalCall(node: Extract<AstNode, { kind: 'Call' }>, state: MemoryState):
       return null;
     }
 
+    if (CALL_BUILTINS.has(name)) {
+      return callBuiltinByName(name, args, state, node.line);
+    }
     const fnId = lookupName(name, state, node.line);
     return callUserFunction(fnId, args, state, node.line);
   }
@@ -863,17 +916,27 @@ function callMethod(objId: RtValue, method: string, args: RtValue[], state: Memo
       clone.repr = formatObject(clone, state);
       return clone.id;
     }
+    if (method === 'sort') {
+      value.sort((a, b) => Number(a) - Number(b));
+      obj.repr = formatObject(obj, state);
+      return null;
+    }
   }
 
   if (obj.type === 'dict') {
     const entries = obj.value as Array<[string, RtValue]>;
     if (method === 'keys') {
-      const keys = entries.map(([k]) => k);
-      const out = allocObject('list', keys.map((k) => keyToValue(k, state)), '');
-      // store string keys as heap strings for display fidelity
-      out.value = entries.map(([k]) => allocString(k, state));
+      // A list of the keys, unquoted, registered in the heap so it behaves like
+      // any other list: type/len/list/for/in all see the real key values.
+      const out = allocObject('list', entries.map(([k]) => keyToValue(k, state)), '');
+      state.heap[out.id] = out;
       out.repr = formatObject(out, state);
       return out.id;
+    }
+    if (method === 'clear') {
+      obj.value = [];
+      obj.repr = formatObject(obj, state);
+      return null;
     }
     if (method === 'get') {
       const keyRepr = dictKeyRepr(args[0], state);
@@ -1043,7 +1106,7 @@ function nextIterator(v: RtValue, state: MemoryState, line: number): RtValue {
  * Names that can be referenced as *values* (e.g. passed to `defaultdict`).
  * A bare occurrence allocates a `builtin` object; a call uses the real builtin.
  */
-const BUILTIN_CONSTRUCTORS = new Set(['list', 'dict', 'int', 'float', 'str', 'tuple', 'set', 'bool', 'len', 'range', 'sorted', 'min', 'max', 'abs', 'sum']);
+const BUILTIN_CONSTRUCTORS = new Set(['list', 'dict', 'int', 'float', 'str', 'tuple', 'set', 'bool', 'len', 'range', 'sorted', 'min', 'max', 'abs', 'sum', 'print', 'type', 'id', 'iter', 'next', 'map', 'filter', 'reduce']);
 
 /**
  * A defaultdict's stored value: the default factory name plus its entry map.
@@ -1198,6 +1261,100 @@ function applyBuiltinCall(fnId: string, args: RtValue[], state: MemoryState, lin
     throw new Error(`TypeError: builtin '${b}' is not supported here (line ${line})`);
   }
   throw new Error(`TypeError: object of type '${fn.type}' is not callable (line ${line})`);
+}
+
+/**
+ * Names that work both as a bare *value* (a `builtin` object for
+ * `map`/`defaultdict`) AND as a direct call (`float(3.9)`, `sum(xs)`). `evalCall`
+ * routes any of these to `callBuiltinByName` before falling back to user frames,
+ * so `float(4.5)` no longer hits the "not callable" path.
+ */
+const CALL_BUILTINS = new Set(['float', 'tuple', 'sum', 'sorted', 'list', 'dict', 'set', 'int', 'str', 'bool', 'abs', 'min', 'max', 'len', 'range']);
+
+/**
+ * Direct call for a builtin that has a bare-value form. Each accepts every
+ * CPython spelling it reasonably can: a single iterable, or a spread of values.
+ */
+function callBuiltinByName(name: string, args: RtValue[], state: MemoryState, line: number): RtValue {
+  switch (name) {
+    case 'float': {
+      if (args.length !== 1) throw new Error(`TypeError: float() takes exactly one argument (line ${line})`);
+      const n = Number(derefNumber(args[0], state));
+      if (Number.isNaN(n)) throw new Error(`TypeError: bad float argument (line ${line})`);
+      return n;
+    }
+    case 'sum': {
+      if (args.length < 1 || args.length > 2) throw new Error(`TypeError: sum() takes at most two arguments (line ${line})`);
+      let acc = args.length === 2 ? Number(derefNumber(args[1]!, state)) : 0;
+      for (const e of readNumbers(args[0], state)) acc += e;
+      return acc;
+    }
+    case 'sorted': {
+      if (args.length !== 1) throw new Error(`TypeError: sorted() takes exactly one argument (line ${line})`);
+      return sortedBuiltin(args[0], state, line);
+    }
+    case 'tuple': {
+      const items = args.length === 1 ? drainIterable(args[0], state, line) : args;
+      const o = allocObject('tuple', items, '');
+      state.heap[o.id] = o;
+      o.repr = formatObject(o, state);
+      return o.id;
+    }
+    default:
+      // list/dict/set/int/str/bool/abs/min/max/len/range — evalCall handles them
+      // above, so we only land here for the not-yet-handled names. Route the
+      // common ones so a future edit that moves them still works.
+      if (name === 'abs') {
+        if (args.length !== 1) throw new Error(`TypeError: abs() takes exactly one argument (line ${line})`);
+        return Math.abs(derefNumber(args[0], state));
+      }
+      if (name === 'min' || name === 'max') return minMaxBuiltin(name, args, state, line);
+      throw new Error(`TypeError: object is not callable (line ${line})`);
+  }
+}
+
+/** `min`/`max` — either one iterable (`min([3,1,2])`) or a spread of values (`min(3,1,2)`). */
+function minMaxBuiltin(name: string, args: RtValue[], state: MemoryState, line: number): RtValue {
+  let nums: number[];
+  if (args.length === 1) {
+    nums = readNumbers(args[0]!, state);
+  } else {
+    if (args.length === 0) throw new Error(`TypeError: ${name}() expected at least one argument, got 0 (line ${line})`);
+    nums = args.map((a) => {
+      const n = Number(derefNumber(a, state));
+      if (Number.isNaN(n)) throw new Error(`TypeError: ${name}() argument is not a number (line ${line})`);
+      return n;
+    });
+  }
+  if (nums.length === 0) throw new Error(`ValueError: ${name}() arg is an empty sequence (line ${line})`);
+  return name === 'min' ? Math.min(...nums) : Math.max(...nums);
+}
+
+/** Read the numeric elements of a container (list/tuple/set) or a range. */
+function readNumbers(v: RtValue, state: MemoryState): number[] {
+  if (typeof v !== 'string' || !state.heap[v]) throw new Error('TypeError: expected a list of numbers');
+  const obj = state.heap[v];
+  if (['list', 'tuple', 'set'].includes(obj.type)) {
+    return (obj.value as RtValue[]).map((e) => {
+      const n = Number(e);
+      if (Number.isNaN(n)) throw new Error('TypeError: expected numeric values');
+      return n;
+    });
+  }
+  throw new Error(`TypeError: ${obj.type} is not an iterable of numbers`);
+}
+
+/** `sorted(xs)` → a new list, ascending (numeric or lexicographic by display). */
+function sortedBuiltin(v: RtValue, state: MemoryState, line: number): RtValue {
+  const items = drainIterable(v, state, line);
+  const allNumeric = items.length > 0 && items.every((e) => Number.isFinite(Number(derefNumber(e, state))));
+  const sortedItems = [...items].sort(allNumeric
+    ? (a, b) => Number(derefNumber(a, state)) - Number(derefNumber(b, state))
+    : (a, b) => displayValue(a, state).localeCompare(displayValue(b, state)));
+  const o = allocObject('list', sortedItems, '');
+  state.heap[o.id] = o;
+  o.repr = formatObject(o, state);
+  return o.id;
 }
 
 /**
@@ -2600,9 +2757,32 @@ function subscriptGet(objId: RtValue, index: RtValue, state: MemoryState, line: 
   throw new Error(`TypeError: '${obj.type}' object is not subscriptable (line ${line})`);
 }
 
-function sliceGet(objId: RtValue, start: RtValue, stop: RtValue, state: MemoryState, line: number): RtValue {
+function sliceGet(objId: RtValue, start: RtValue, stop: RtValue, step: RtValue | null, state: MemoryState, line: number): RtValue {
   const obj = state.heap[objId as string];
   if (!obj) throw new Error(`TypeError: object is not sliceable (line ${line})`);
+  if (step !== null) {
+    const st = Math.trunc(Number(step));
+    if (st === 0) throw new Error(`SyntaxError: slice step cannot be zero (line ${line})`);
+    const length = obj.type === 'str' ? (obj.value as string).length : (obj.value as RtValue[]).length;
+    const [lo, hi] = st > 0
+      ? [start === null ? 0 : Math.trunc(Number(start)), stop === null ? length : Math.trunc(Number(stop))]
+      : [start === null ? length - 1 : Math.trunc(Number(start)), stop === null ? -1 : Math.trunc(Number(stop))];
+    const idx: number[] = [];
+    if (st > 0) for (let i = Math.max(0, lo); i < Math.min(length, hi); i += st) idx.push(i);
+    else for (let i = Math.max(0, lo); i > Math.max(-1, hi); i += st) idx.push(i);
+    if (obj.type === 'list' || obj.type === 'tuple') {
+      const src = obj.value as RtValue[];
+      const out = allocObject(obj.type, idx.map((i) => src[i]!), '');
+      state.heap[out.id] = out;
+      out.repr = formatObject(out, state);
+      return out.id;
+    }
+    if (obj.type === 'str') {
+      const s = obj.value as string;
+      return allocString(idx.map((i) => s[i] ?? '').join(''), state);
+    }
+    throw new Error(`TypeError: '${obj.type}' object is not sliceable (line ${line})`);
+  }
   const s = start === null ? 0 : Number(start);
   const e = stop === null
     ? (obj.type === 'str' ? (obj.value as string).length : (obj.value as RtValue[]).length)

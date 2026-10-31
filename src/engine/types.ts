@@ -51,6 +51,8 @@ export interface HeapObject {
 export interface Frame {
   name: string;
   locals: Record<string, RtValue>;
+  /** Names declared `global` in this frame — assignments write to the module frame. */
+  globalNames?: string[];
 }
 
 /** The chart kinds the Plot board tab can render. */
@@ -199,6 +201,7 @@ export interface SliceNode extends BaseNode {
   object: AstNode;
   start: AstNode | null;
   stop: AstNode | null;
+  step: AstNode | null;
   /** The attribute selector when the target is `obj.attr[a:b]` (e.g. `df.loc`). */
   attr?: string;
 }
@@ -292,6 +295,11 @@ export interface BreakNode extends BaseNode {
 export interface ContinueNode extends BaseNode {
   kind: 'Continue';
 }
+/** `global name, name` — mark names to bind on the module frame, not the local one. */
+export interface GlobalNode extends BaseNode {
+  kind: 'Global';
+  names: string[];
+}
 
 export type AstNode =
   | LiteralNode
@@ -321,7 +329,8 @@ export type AstNode =
   | ForNode
   | WhileNode
   | BreakNode
-  | ContinueNode;
+  | ContinueNode
+  | GlobalNode;
 
 /* —— Goals / checks —— */
 

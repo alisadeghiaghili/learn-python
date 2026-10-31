@@ -6,7 +6,7 @@ import type { Token } from './types';
 
 const KEYWORDS = new Set([
   'def', 'return', 'if', 'elif', 'else', 'for', 'in', 'while',
-  'and', 'or', 'not', 'is', 'None', 'True', 'False', 'pass',
+  'and', 'or', 'not', 'is', 'None', 'True', 'False', 'pass', 'global',
   'break', 'continue', 'import', 'from', 'as', 'class', 'lambda',
   'async', 'await',
 ]);
