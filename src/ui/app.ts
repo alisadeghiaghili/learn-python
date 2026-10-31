@@ -509,6 +509,25 @@ export class App {
     if (this.level) this.checkVerification(source);
   }
 
+  /**
+   * The solution line to try next while a level is still unsolved. A `vars`
+   * goal is checked all-or-nothing against the final state, so its failing row
+   * never points past the first requirement and the line is stepped by how many
+   * statements have been submitted. Other goal kinds (stdout, predicates, plot)
+   * mark each row as it passes, so the first failing row is the right index.
+   */
+  private nextSolutionLine(goal: GoalSpec, checks: DockCheck[]): string | null {
+    const cmds = splitPythonStatements(this.level!.solution ?? this.level!.brief);
+    let idx: number;
+    if (goal.type === 'vars') {
+      idx = Math.min(this.statementsUsed, cmds.length - 1);
+    } else {
+      idx = checks.findIndex((c) => !c.passed);
+      if (idx === -1) idx = cmds.length - 1;
+    }
+    return cmds[idx] ?? null;
+  }
+
   private checkVerification(_lastCode: string): void {
     if (!this.level) return;
     const snap = this.session.snapshot();
@@ -516,14 +535,8 @@ export class App {
     this.renderDock(verdict.results);
 
     if (!verdict.ok) {
-      const solutionCmds = splitPythonStatements(this.level.solution ?? this.level.brief);
-      // The checklist is one row per goal and shares the overall verdict, so a
-      // "first failing row" never points past the first goal (e.g. `age` is a
-      // single row that stays red until 11). Step the hint forward by how many
-      // statements the learner has actually submitted instead.
-      const nextIdx = Math.min(this.statementsUsed, solutionCmds.length - 1);
-      const cmd = solutionCmds[nextIdx] ?? this.level.brief;
-      this.terminal.setHint(cmd.split('\n')[0] ?? null);
+      const cmd = this.nextSolutionLine(this.level.goal, verdict.results);
+      if (cmd) this.terminal.setHint(cmd.split('\n')[0] ?? null);
       return;
     }
 
@@ -625,11 +638,19 @@ export class App {
     const checks = checkResults ?? this.checkResults ?? [];
     const solved = checks.length > 0 && checks.every((c) => c.passed);
     const currentId = checks.findIndex((c) => !c.passed);
+    // The solution line to try next: stepped by submitted statements for a
+    // `vars` goal (whose rows are all-or-nothing), else the first failing row.
+    const nextStep = this.nextSolutionLine(level.goal, checks);
+    const firstNext = nextStep ? nextStep.split('\n')[0] : solutionCmds[0]?.split('\n')[0];
 
     const items = checks.map((c, i) => {
       const done = c.passed;
       const isCurrent = !solved && !done && i === currentId;
-      const cmd = solutionCmds[i] ?? solutionCmds[0] ?? level.brief;
+      // The highlighted "now" row points at the next solution line; the others
+      // map by position (identical when goals and solution lines line up 1:1).
+      const cmd = isCurrent
+        ? (nextStep ?? solutionCmds[0] ?? level.brief)
+        : (solutionCmds[i] ?? solutionCmds[0] ?? level.brief);
       const firstCmdLine = cmd.split('\n')[0] ?? cmd;
       return `<li class="${done ? 'met' : ''}${isCurrent ? ' current' : ''}">
         <div class="g-label" dir="ltr">${done ? '✓' : isCurrent ? '▶' : '○'} <code class="g-step-cmd" data-cmd="${escapeHtml(firstCmdLine)}" title="Click to fill into terminal">${escapeHtml(firstCmdLine)}</code>${
@@ -639,7 +660,6 @@ export class App {
       </li>`;
     }).join('');
 
-    const firstNext = currentId !== -1 ? solutionCmds[currentId]?.split('\n')[0] : solutionCmds[0]?.split('\n')[0];
     const nextBlock = solved
       ? `<div class="next-box met">${escapeHtml(u.allChecksPassed)}</div>`
       : `<div class="next-box">
