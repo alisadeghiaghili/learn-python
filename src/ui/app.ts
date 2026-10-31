@@ -517,11 +517,13 @@ export class App {
 
     if (!verdict.ok) {
       const solutionCmds = splitPythonStatements(this.level.solution ?? this.level.brief);
-      const nextIdx = verdict.results.findIndex((r) => !r.passed);
-      if (nextIdx !== -1) {
-        const cmd = solutionCmds[Math.min(nextIdx, solutionCmds.length - 1)] ?? this.level.brief;
-        this.terminal.setHint(cmd.split('\n')[0] ?? null);
-      }
+      // The checklist is one row per goal and shares the overall verdict, so a
+      // "first failing row" never points past the first goal (e.g. `age` is a
+      // single row that stays red until 11). Step the hint forward by how many
+      // statements the learner has actually submitted instead.
+      const nextIdx = Math.min(this.statementsUsed, solutionCmds.length - 1);
+      const cmd = solutionCmds[nextIdx] ?? this.level.brief;
+      this.terminal.setHint(cmd.split('\n')[0] ?? null);
       return;
     }
 
