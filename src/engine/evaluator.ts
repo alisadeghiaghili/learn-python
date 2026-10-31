@@ -2762,7 +2762,7 @@ function sliceGet(objId: RtValue, start: RtValue, stop: RtValue, step: RtValue |
   if (!obj) throw new Error(`TypeError: object is not sliceable (line ${line})`);
   if (step !== null) {
     const st = Math.trunc(Number(step));
-    if (st === 0) throw new Error(`SyntaxError: slice step cannot be zero (line ${line})`);
+    if (st === 0) throw new Error(`ValueError: slice step cannot be zero (line ${line})`);
     const length = obj.type === 'str' ? (obj.value as string).length : (obj.value as RtValue[]).length;
     const [lo, hi] = st > 0
       ? [start === null ? 0 : Math.trunc(Number(start)), stop === null ? length : Math.trunc(Number(stop))]
