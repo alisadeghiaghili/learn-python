@@ -28,8 +28,10 @@
   --cache: var(--teal);
 
   --font-display: 'Fraunces', 'Iowan Old Style', Georgia, serif;
-  --font-body: 'IBM Plex Sans', 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', 'Cascadia Code', 'Consolas', monospace;
+  /* Vazirmatn (webfont) + Tahoma give Persian (fa) proper glyph shaping; the
+   * IBM Plex faces cover Latin/code and are tried first for those. */
+  --font-body: 'IBM Plex Sans', 'Segoe UI', 'Vazirmatn', Tahoma, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Cascadia Code', 'Consolas', 'Vazirmatn', Tahoma, monospace;
   --ui: var(--font-body);
   --mono: var(--font-mono);
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
