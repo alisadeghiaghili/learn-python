@@ -28,7 +28,10 @@ export const de: Catalog = {
     visitorsTitle: 'Eindeutige Besucher',
     githubTitle: 'GitHub-Repository',
     support: 'Unterstützen',
-    supportTitle: 'Kaffee spendieren',
+    supportTitle: 'Projekt unterstützen',
+    supportMenu: 'Menü: Unterstützung',
+    buymeacoffeeTitle: 'Buy Me a Coffee',
+    coffeebedeTitle: 'Coffee Bede',
     titleLine: (idx, name) => `Level ${idx} · ${name}`,
     sandboxTitle: 'Sandbox',
 
@@ -148,10 +151,10 @@ export const de: Catalog = {
       },
       {
         id: 'links',
-        selector: 'a.tb-link',
+        selector: '.toolbar-links',
         title: 'GitHub & Unterstützung',
-        what: 'Quellcode-Repository und die Buy-Me-A-Coffee-Seite des Verfassers.',
-        how: 'Beide öffnen sich in einem neuen Tab.',
+        what: 'Quellcode-Repository plus das Unterstützung-Menü mit Buy-Me-A-Coffee und Coffee Bede.',
+        how: 'Alle Links öffnen sich in einem neuen Tab.',
       },
     ],
 

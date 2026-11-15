@@ -49,6 +49,9 @@ export interface UiCopy {
   githubTitle: string;
   support: string;
   supportTitle: string;
+  supportMenu: string;
+  buymeacoffeeTitle: string;
+  coffeebedeTitle: string;
   titleLine: (idx: number, name: string) => string;
   sandboxTitle: string;
 

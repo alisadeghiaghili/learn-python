@@ -28,7 +28,10 @@ export const fa: Catalog = {
     visitorsTitle: 'بازدیدگران منحصربه‌فرد',
     githubTitle: 'مخزن GitHub',
     support: 'حمایت',
-    supportTitle: 'برایم قهوه بخر',
+    supportTitle: 'حمایت از پروژه',
+    supportMenu: 'منوی حمایت',
+    buymeacoffeeTitle: 'Buy Me a Coffee',
+    coffeebedeTitle: 'کافی‌بده',
     titleLine: (idx, name) => `مرحله ${idx} · ${name}`,
     sandboxTitle: 'ساندباکس',
 
@@ -148,10 +151,10 @@ export const fa: Catalog = {
       },
       {
         id: 'links',
-        selector: 'a.tb-link',
+        selector: '.toolbar-links',
         title: 'GitHub و حمایت',
-        what: 'مخزنِ سورس و صفحه‌ی Buy-Me-A-Coffee برای ناشر.',
-        how: 'هر دو در تب جدید باز می‌شن.',
+        what: 'مخزنِ سورس و منویِ حمایت با Buy-Me-A-Coffee و کافی‌بده برای ناشر.',
+        how: 'همه در تب جدید باز می‌شن.',
       },
     ],
 
