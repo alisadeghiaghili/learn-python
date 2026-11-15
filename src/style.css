@@ -606,6 +606,14 @@ button.ghost,
   padding: 0;
 }
 
+/* The memory / plot / RAM diagrams and the step transport are left-to-right
+ * technical content (stack → heap, addresses, ⏮ ◀ ▶ ⏭). Keep them LTR so the
+ * Persian (RTL) locale doesn't mirror the canvas or reverse the transport. */
+.board-body,
+.step-bar {
+  direction: ltr;
+}
+
 .board-pane {
   display: none;
   height: 100%;
